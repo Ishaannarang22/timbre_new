@@ -10,7 +10,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/node3/projects/voice_fun/scripts/serve_persistent.sh</string>
+        <string>/Users/node3/timbre_new/scripts/serve_persistent.sh</string>
     </array>
 
     <!-- cloudflared (/opt/homebrew/bin) + system tools must be on PATH. -->
@@ -31,12 +31,12 @@
     <integer>10</integer>
 
     <key>WorkingDirectory</key>
-    <string>/Users/node3/projects/voice_fun</string>
+    <string>/Users/node3/timbre_new</string>
 
     <!-- launchd-level stdout/stderr (the daemon also writes tunnel_daemon.log). -->
     <key>StandardOutPath</key>
-    <string>/Users/node3/projects/voice_fun/logs/launchd_tunnel.log</string>
+    <string>/Users/node3/timbre_new/logs/launchd_tunnel.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/node3/projects/voice_fun/logs/launchd_tunnel.log</string>
+    <string>/Users/node3/timbre_new/logs/launchd_tunnel.log</string>
 </dict>
 </plist>

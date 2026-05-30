@@ -105,7 +105,7 @@ class PatientSmartTurnV3(LocalSmartTurnAnalyzerV3):
         return result
 
 INBOUND_GREETING = "Hi there, thanks for calling. How are you feeling today?"
-OUTBOUND_GREETING = "Hi, this is your wellness companion checking in. How are you feeling today?"
+OUTBOUND_GREETING = "Hi, this is a follow-up call from your care team, just checking in on how you've been since your visit. How are you feeling?"
 
 # Genuine sign-offs (matched on the agent's COMPLETED turn → auto-hangup).
 GOODBYE_RE = re.compile(

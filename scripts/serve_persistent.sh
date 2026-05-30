@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-PROJECT="/Users/node3/projects/voice_fun"
+PROJECT="/Users/node3/timbre_new"
 LOGFILE="${PROJECT}/logs/tunnel_daemon.log"
 PYTHON="${PROJECT}/.venv/bin/python"
 SCRIPT="${PROJECT}/scripts/serve_persistent.py"
