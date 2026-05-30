@@ -25,6 +25,8 @@ import re
 from dotenv import load_dotenv
 from loguru import logger
 
+from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
@@ -39,7 +41,10 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext, NOT_GIVEN
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import parse_telephony_websocket
@@ -51,6 +56,8 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
+from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 load_dotenv(override=True)
 
@@ -60,6 +67,42 @@ CARTESIA_SPEED = float(os.getenv("CARTESIA_SPEED", "0.95"))
 LLM_MODEL = os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
 MAX_CALL_SECS = float(os.getenv("MAX_CALL_SECS", "300"))
 SR = 8000
+
+# --- ENDPOINTING -------------------------------------------------------------------------
+# VAD is just the TRIGGER: a short silence wakes the turn decision. Smart-Turn v3 (a prosody
+# model) makes the real call, so the agent waits out mid-sentence pauses instead of barging in
+# — important for wellness calls, where people pause to think or get emotional.
+#
+# In Pipecat 1.3.0 the patience knob is SmartTurnParams.confidence_threshold (NOT the old
+# completion_threshold). Source: `prediction = 1 if probability >= confidence_threshold else 0`,
+# where probability = "the turn is complete". So a HIGHER threshold = MORE patient (needs more
+# certainty before ending the turn). Default is 0.5; we raise it to be deliberately patient.
+VAD_STOP_SECS = float(os.getenv("VAD_STOP_SECS", "0.4"))           # short trigger
+SMART_TURN_STOP_SECS = float(os.getenv("SMART_TURN_STOP_SECS", "2.5"))   # hard ceiling
+SMART_TURN_CONFIDENCE = float(os.getenv("SMART_TURN_CONFIDENCE", "0.7"))  # >0.5 = more patient
+
+
+class PatientSmartTurnV3(LocalSmartTurnAnalyzerV3):
+    """Smart Turn v3 with a tunable "are you done?" confidence threshold.
+
+    NOTE on the API: SmartTurnParams exposes only stop_secs / pre_speech_ms / max_duration_secs
+    — there is NO confidence/threshold parameter. Upstream hardcodes the complete/incomplete
+    decision at probability > 0.5, so a borderline pause (model only 51% sure you've finished)
+    ends the turn mid-thought. We keep the exact ONNX model + audio handling and only re-apply
+    the cutoff here: HIGHER threshold = MORE patient (the model must be quite sure you're done,
+    so mid-sentence pauses stay INCOMPLETE). On a wellness call this is what stops the agent
+    from talking over someone who is still gathering their thoughts. (Mirrors the self-hosted
+    bot's src/turn_helpers.py.)
+    """
+
+    def __init__(self, *, completion_threshold: float = 0.7, **kwargs):
+        super().__init__(**kwargs)
+        self._completion_threshold = completion_threshold
+
+    def _predict_endpoint(self, audio_array):
+        result = super()._predict_endpoint(audio_array)  # run the model unchanged
+        result["prediction"] = 1 if result["probability"] > self._completion_threshold else 0
+        return result
 
 INBOUND_GREETING = "Hi there, thanks for calling. How are you feeling today?"
 OUTBOUND_GREETING = "Hi, this is your wellness companion checking in. How are you feeling today?"
@@ -165,7 +208,24 @@ async def run_bot(transport: FastAPIWebsocketTransport, handle_sigint: bool, gre
         ],
         tools=NOT_GIVEN,
     )
-    aggregator = LLMContextAggregatorPair(context)
+
+    # Patient endpointing: a prosody model (not a silence timer) decides when the caller is
+    # done. NOTE: each cloud call builds a fresh analyzer, which loads the Smart-Turn v3 ONNX
+    # model (~0.5-1s on first turn). The self-hosted bot warm-loads it once at process startup;
+    # there's no equivalent cross-call warm cache in a per-call cloud worker, so we accept the
+    # one-time per-call load here.
+    turn_analyzer = PatientSmartTurnV3(
+        completion_threshold=SMART_TURN_CONFIDENCE,
+        params=SmartTurnParams(stop_secs=SMART_TURN_STOP_SECS),
+    )
+    aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(
+            user_turn_strategies=UserTurnStrategies(
+                stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn_analyzer)]
+            )
+        ),
+    )
 
     goodbye = GoodbyeProcessor()
     pipeline = Pipeline(
@@ -230,7 +290,7 @@ async def bot(runner_args: RunnerArguments):
             audio_in_sample_rate=SR,
             audio_out_sample_rate=SR,
             add_wav_header=False,
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.5)),
+            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=VAD_STOP_SECS)),
             serializer=serializer,
         ),
     )

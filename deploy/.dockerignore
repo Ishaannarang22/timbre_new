@@ -1,0 +1,14 @@
+# Never ship secrets into the build context (they go via `pipecat cloud secrets set`).
+secrets.env
+*.env
+
+# Local-only / not needed in the image
+dialout_test.py
+README.md
+
+# Python + tooling junk
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/
+.DS_Store
