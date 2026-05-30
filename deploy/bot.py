@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import asyncio  # noqa: E402
+from datetime import date  # noqa: E402
 
 from dotenv import load_dotenv  # noqa: E402
 from loguru import logger  # noqa: E402
@@ -83,15 +84,29 @@ VAD_STOP_SECS = float(os.getenv("VAD_STOP_SECS", "0.4"))
 USER_SPEECH_TIMEOUT = float(os.getenv("USER_SPEECH_TIMEOUT", "0.8"))
 
 
-def build_greeting(preferred: str, language: str) -> str:
+def build_greeting(preferred: str, language: str, *, newborn_name: str | None = None,
+                   days_postpartum: int | None = None) -> str:
+    """Personalized opening line. Mentions the newborn by name + how many weeks/days
+    postpartum she is, so it lands like "hey, it's been 4 weeks with Yuna, how is it
+    going?" instead of a generic call."""
+    if days_postpartum is None:
+        when = "since your delivery"
+    elif days_postpartum <= 10:
+        when = f"about {days_postpartum} days in"
+    else:
+        wks = max(1, days_postpartum // 7)
+        when = f"{wks} week{'s' if wks != 1 else ''} in now"
+    baby = newborn_name or "the baby"
     if language == "es":
         return (
-            f"Hola {preferred}, soy Maya de Raya Memorial llamando para ver cómo "
-            "estás tú y el bebé. ¿Es un buen momento?"
+            f"Hola {preferred}, soy Maya de Raya Memorial. Ya {when} con {baby} — "
+            "te llamo solo para ver cómo estás tú y el bebé. ¿Es un buen momento? "
+            "Antes de empezar, ¿me confirmas tu nombre completo y tu fecha de nacimiento?"
         )
     return (
-        f"Hi {preferred}, this is Maya from Raya Memorial calling to check in "
-        "on you and the baby. Is this a good time?"
+        f"Hi {preferred}, this is Maya from Raya Memorial. {when.capitalize()} with "
+        f"{baby} — just calling to check in on you both. Before we get started, "
+        "can I confirm your full name and date of birth?"
     )
 
 
@@ -273,7 +288,18 @@ async def bot(runner_args: RunnerArguments):
     appointments = profile.get("appointments")
     prescriptions = profile.get("prescriptions")
     preferred = patient.get("preferred_name") or (patient.get("name", "there").split() or ["there"])[0]
-    greeting = build_greeting(preferred, language)
+    # Personalize the greeting with the newborn's name + how-many-weeks-in. Both fields are
+    # best-effort; build_greeting falls back to a generic version when they're missing.
+    newborn_name = (newborn or {}).get("name")
+    days_pp: int | None = None
+    bd = patient.get("birth_date") or patient.get("delivery_date")
+    if bd:
+        try:
+            bd_date = date.fromisoformat(bd[:10]) if isinstance(bd, str) else bd
+            days_pp = (date.today() - bd_date).days
+        except Exception:  # noqa: BLE001
+            days_pp = None
+    greeting = build_greeting(preferred, language, newborn_name=newborn_name, days_postpartum=days_pp)
 
     # Create the call row up front so EVERY per-node write references a real call_id
     # (without this, writes carry a fake "cloud-…" id and orphan / FK-fail). Only when

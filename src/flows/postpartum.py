@@ -39,6 +39,7 @@ node keeps the LLM in the current node — Pipecat preserves context.
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 from typing import Any
 
 from loguru import logger
@@ -191,6 +192,9 @@ async def record_recovery(
     args: FlowArgs, fm: FlowManager
 ) -> tuple[dict, NodeConfig | None]:
     client, patient, _, call_id, _ = _ctx(fm)
+    # MEDIUM TRIM: skip mental_health_phq2 / phq9 / newborn. Recovery now flows directly to
+    # medication_adherence. Mood is folded into recovery's emotional_state field; suicidal
+    # ideation is caught by the escalate_crisis global from anywhere.
     _spawn(fm, client.post_recovery(
         patient["id"],
         call_id,
@@ -202,8 +206,8 @@ async def record_recovery(
         emotional_state=args.get("emotional_state"),
         notes=args.get("notes"),
     ))
-    await _patch_current_node(fm, "mental_health_phq2")
-    return {"recorded": True}, build_phq2_node(fm)
+    await _patch_current_node(fm, "medication_adherence")
+    return {"recorded": True}, build_medication_adherence_node(fm)
 
 
 async def record_phq2(
@@ -400,8 +404,9 @@ async def record_social(
         return {"escalated": True}, build_escalation_handoff_node(
             fm, severity="urgent", category="crisis"
         )
-    await _patch_current_node(fm, "doula_handoff")
-    return {"recorded": True}, build_doula_node(fm)
+    # MEDIUM TRIM: skip doula_handoff; social flows directly into csat_collection.
+    await _patch_current_node(fm, "csat_collection")
+    return {"recorded": True}, build_csat_node(fm)
 
 
 async def confirm_doula_visit(
@@ -644,8 +649,62 @@ def _lang(fm: FlowManager) -> str:
     return fm.state.get("language", "en")
 
 
+def _patient_context(fm: FlowManager) -> dict[str, str]:
+    """Substitution dict for templated prompts (name, postpartum age, newborn, etc.)."""
+    _, patient, newborn, _, _ = _ctx(fm)
+    preferred = (
+        patient.get("preferred_name")
+        or (patient.get("name") or "there").split()[0]
+        or "there"
+    )
+    delivery = (patient.get("birth_type") or "delivery").replace("_", "-")
+    bd = patient.get("birth_date") or patient.get("delivery_date")
+    days_pp: int | None = None
+    if bd:
+        try:
+            if isinstance(bd, str):
+                bd = date.fromisoformat(bd[:10])
+            days_pp = (date.today() - bd).days
+        except Exception:  # noqa: BLE001
+            days_pp = None
+    if days_pp is None:
+        days_text = "in the early postpartum period"
+    elif days_pp <= 7:
+        days_text = f"{days_pp} day{'s' if days_pp != 1 else ''} postpartum"
+    else:
+        weeks = days_pp // 7
+        days_text = f"{weeks} week{'s' if weeks != 1 else ''} postpartum"
+    newborn_name = (newborn or {}).get("name") or "the baby"
+    nb_dob = (newborn or {}).get("dob")
+    age_text = "growing fast"
+    if nb_dob:
+        try:
+            if isinstance(nb_dob, str):
+                nb_dob = date.fromisoformat(nb_dob[:10])
+            wks = (date.today() - nb_dob).days // 7
+            age_text = (
+                f"{wks} week{'s' if wks != 1 else ''} old"
+                if wks > 0
+                else "just a few days old"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "preferred_name": preferred,
+        "delivery_type": delivery,
+        "days_postpartum_text": days_text,
+        "newborn_name": newborn_name,
+        "newborn_age_text": age_text,
+    }
+
+
 def _role_message(fm: FlowManager) -> str:
-    return load_prompt(_lang_key("postpartum_role", _lang(fm)))
+    template = load_prompt(_lang_key("postpartum_role", _lang(fm)))
+    try:
+        return template.format(**_patient_context(fm))
+    except (KeyError, IndexError) as e:
+        logger.warning(f"role template substitution failed: {e}; returning raw")
+        return template
 
 
 def _task(fm: FlowManager, base: str) -> list[dict[str, str]]:
