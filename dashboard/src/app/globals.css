@@ -3,27 +3,47 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Editorial Warm — see DESIGN.md at the dashboard root.
+ * Tokens here are the source of truth for the UI.
+ */
 :root {
-  --background: 250 250% 99%;
-  --foreground: 158 25% 12%;
-  --card: 0 0% 100%;
-  --card-foreground: 158 25% 12%;
-  --muted: 158 12% 96%;
-  --muted-foreground: 158 9% 42%;
-  --border: 158 16% 90%;
-  --input: 158 16% 90%;
-  --ring: 174 64% 35%;
-  --primary: 174 64% 28%;
-  --primary-foreground: 0 0% 100%;
-  --accent: 158 20% 95%;
-  --accent-foreground: 174 64% 18%;
-  --destructive: 0 78% 51%;
-  --destructive-foreground: 0 0% 100%;
-  --warning: 32 95% 50%;
-  --warning-foreground: 0 0% 100%;
-  --success: 158 64% 38%;
-  --success-foreground: 0 0% 100%;
-  --radius: 0.625rem;
+  /* Surfaces */
+  --background: 38 52% 94%;     /* #F7F1E6 — Cream Limestone */
+  --foreground: 33 17% 10%;     /* #1F1B16 — Ink */
+  --card: 0 0% 100%;            /* #FFFFFF — Paper White */
+  --card-foreground: 33 17% 10%;
+  --muted: 40 43% 89%;          /* #EFE7D7 — Sand */
+  --muted-foreground: 32 10% 38%; /* #6B6258 — Slate (Ink Muted) */
+  --border: 38 37% 83%;         /* #E4D9C5 — Wheat */
+  --input: 38 37% 83%;
+
+  /* Brand */
+  --primary: 13 50% 48%;        /* #B8593E — Terracotta */
+  --primary-foreground: 36 89% 96%; /* #FFF6EC — warm paper, on terracotta */
+  --ring: 13 50% 48%;
+
+  /* Accent (tonal, used for hovers / soft fills) */
+  --accent: 40 43% 89%;
+  --accent-foreground: 33 17% 10%;
+
+  /* Status */
+  --destructive: 8 60% 44%;     /* #B5402D — Crimson */
+  --destructive-foreground: 36 89% 96%;
+  --warning: 36 62% 48%;        /* #C68A2E — Amber */
+  --warning-foreground: 36 89% 96%;
+  --success: 118 12% 49%;       /* #6F8B6E — Sage */
+  --success-foreground: 36 89% 96%;
+
+  /* Soft status tints — used on chips/badges */
+  --success-soft: 110 16% 91%;
+  --success-soft-foreground: 118 18% 30%;
+  --warning-soft: 38 70% 88%;
+  --warning-soft-foreground: 32 65% 28%;
+  --destructive-soft: 10 55% 90%;
+  --destructive-soft-foreground: 9 60% 28%;
+
+  --radius: 0.625rem; /* 10px — md */
 }
 
 @theme inline {
@@ -46,11 +66,21 @@
   --color-warning-foreground: hsl(var(--warning-foreground));
   --color-success: hsl(var(--success));
   --color-success-foreground: hsl(var(--success-foreground));
-  --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-success-soft: hsl(var(--success-soft));
+  --color-success-soft-foreground: hsl(var(--success-soft-foreground));
+  --color-warning-soft: hsl(var(--warning-soft));
+  --color-warning-soft-foreground: hsl(var(--warning-soft-foreground));
+  --color-destructive-soft: hsl(var(--destructive-soft));
+  --color-destructive-soft-foreground: hsl(var(--destructive-soft-foreground));
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+
+  --font-sans: var(--font-inter);
+  --font-serif: var(--font-fraunces);
+  --font-mono: var(--font-jetbrains);
 }
 
 * {
@@ -60,5 +90,16 @@
 body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
-  font-feature-settings: "rlig" 1, "calt" 1;
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, .font-serif {
+  font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+  font-variation-settings: "SOFT" 50, "opsz" 48;
+}
+
+code, pre, .font-mono {
+  font-family: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
 }

@@ -8,7 +8,6 @@ import {
   CalendarClock,
   ClipboardList,
   Gauge,
-  Heart,
   MessageSquareQuote,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -25,15 +24,14 @@ const items = [
 export function Sidebar() {
   const pathname = usePathname();
   return (
-    <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-[hsl(var(--border))] bg-card">
-      <div className="flex items-center gap-2 px-5 py-5">
-        <div className="rounded-md bg-primary/10 p-1.5 text-primary">
-          <Heart className="size-5" />
-        </div>
-        <div className="flex flex-col leading-tight">
-          <span className="text-sm font-semibold">timbre</span>
-          <span className="text-xs text-muted-foreground">postpartum care console</span>
-        </div>
+    <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-[hsl(var(--border))] bg-[hsl(var(--background))]">
+      <div className="flex items-baseline gap-2 px-6 pt-7 pb-6">
+        <span className="font-serif text-[26px] leading-none text-foreground tracking-tight">
+          timbre
+        </span>
+        <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+          care console
+        </span>
       </div>
       <nav className="flex flex-1 flex-col gap-0.5 px-3">
         {items.map(({ href, label, icon: Icon }) => {
@@ -46,19 +44,19 @@ export function Sidebar() {
               key={href}
               href={href}
               className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                "flex items-center gap-3 rounded-sm px-3 py-2 text-sm transition-colors",
                 active
-                  ? "bg-accent text-accent-foreground font-medium"
-                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                  ? "bg-muted text-foreground font-medium"
+                  : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
               )}
             >
-              <Icon className="size-4" />
+              <Icon className="size-4 shrink-0" strokeWidth={1.75} />
               {label}
             </Link>
           );
         })}
       </nav>
-      <div className="px-5 py-4 text-xs text-muted-foreground">
+      <div className="px-6 py-5 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
         Demo data only — no real PHI.
       </div>
     </aside>
