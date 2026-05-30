@@ -1,0 +1,36 @@
+---
+config:
+  theme: base
+  themeVariables:
+    background: "#F7F1E6"
+    primaryColor: "#FFF6EC"
+    primaryBorderColor: "#B8593E"
+    primaryTextColor: "#1F1B16"
+    lineColor: "#6B6258"
+    fontFamily: "Inter, system-ui, sans-serif"
+---
+flowchart LR
+  P["📱 Patient<br/><i>at home, day 1-42 postpartum</i>"]
+  T["☎️ Twilio<br/><i>phone call</i>"]
+  V["🎙️ timbre voice agent<br/><i>Pipecat + NVIDIA Nemotron</i>"]
+  D["🗄️ Dashboard<br/><i>Next.js + Supabase</i>"]
+  N["👩‍⚕️ Care team<br/><i>nurse · doula · coordinator</i>"]
+  C["🧪 Cekura<br/><i>persona simulator + LLM judge</i>"]
+
+  P <-->|μ-law audio| T
+  T <-->|WebSocket media stream| V
+  V -->|patient answers + escalations| D
+  D -->|live queue, transcripts, red alerts| N
+  N -.->|callback for escalations| P
+  C -.->|simulated calls, scored offline| V
+  C -->|eval results| D
+
+  classDef patient fill:#F7F1E6,stroke:#E4D9C5,color:#1F1B16
+  classDef agent fill:#FFF6EC,stroke:#B8593E,color:#1F1B16,stroke-width:2px
+  classDef dash fill:#FFFFFF,stroke:#E4D9C5,color:#1F1B16
+  classDef eval fill:#EFE7D7,stroke:#C68A2E,color:#1F1B16
+
+  class P,N patient
+  class V agent
+  class T,D dash
+  class C eval

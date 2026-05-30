@@ -1,0 +1,69 @@
+---
+config:
+  theme: base
+  themeVariables:
+    background: "#F7F1E6"
+    primaryColor: "#FFF6EC"
+    primaryBorderColor: "#B8593E"
+    primaryTextColor: "#1F1B16"
+    lineColor: "#6B6258"
+    fontFamily: "Inter, system-ui, sans-serif"
+---
+flowchart TB
+  START(["📞 incoming call<br/><i>/twiml mints token,<br/>pulls patient_id from queue</i>"])
+  VERIFY["identity_verify"]
+  PROXY["proxy_reject_<br/>reschedule"]
+  RECOV["mother_recovery"]
+  PHQ2["mental_health_phq2"]
+  PHQ9["phq9_full"]
+  NEWB["newborn_health"]
+  LACT["lactation_support"]
+  MED["medication_adherence<br/><i>one entry per Rx</i>"]
+  PHARM["pharmacy_routing"]
+  SOC["social_screen"]
+  DOULA["doula_handoff"]
+  CSAT["csat_collection"]
+  HANDOFF[/"escalation_handoff"/]
+  ENDOK(["END"])
+  ENDESC(["END"])
+
+  ESCNURSE{{"🚨 escalate_to_nurse"}}
+  ESCPED{{"🚨 escalate_pediatric"}}
+  ESCCRIS{{"🚨 escalate_crisis"}}
+
+  START --> VERIFY
+  VERIFY -->|proxy detected| PROXY
+  PROXY --> ENDOK
+  VERIFY -->|verified| RECOV
+  RECOV -->|red flag| ESCNURSE
+  RECOV --> PHQ2
+  PHQ2 -->|score ≥ 3| PHQ9
+  PHQ2 -->|score < 3| NEWB
+  PHQ9 -->|Q9 > 0| ESCCRIS
+  PHQ9 --> NEWB
+  NEWB -->|red flag| ESCPED
+  NEWB -->|feeding issue| LACT
+  LACT --> MED
+  NEWB --> MED
+  MED -->|cost / transport / no_pharmacy| PHARM
+  MED --> SOC
+  PHARM --> SOC
+  SOC -->|IPV active danger| ESCCRIS
+  SOC --> DOULA
+  DOULA --> CSAT
+  CSAT --> ENDOK
+
+  ESCNURSE --> HANDOFF
+  ESCPED --> HANDOFF
+  ESCCRIS --> HANDOFF
+  HANDOFF --> ENDESC
+
+  classDef node fill:#FFF6EC,stroke:#B8593E,color:#1F1B16
+  classDef escalation fill:#F4D9D2,stroke:#B5402D,color:#1F1B16,stroke-width:2px
+  classDef terminal fill:#EFE7D7,stroke:#6B6258,color:#1F1B16
+  classDef handoff fill:#F7E8CC,stroke:#C68A2E,color:#1F1B16
+
+  class VERIFY,PROXY,RECOV,PHQ2,PHQ9,NEWB,LACT,MED,PHARM,SOC,DOULA,CSAT node
+  class ESCNURSE,ESCPED,ESCCRIS escalation
+  class START,ENDOK,ENDESC terminal
+  class HANDOFF handoff

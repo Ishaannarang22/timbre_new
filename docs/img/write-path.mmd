@@ -1,0 +1,38 @@
+---
+config:
+  theme: base
+  themeVariables:
+    background: "#F7F1E6"
+    primaryColor: "#FFF6EC"
+    primaryBorderColor: "#B8593E"
+    primaryTextColor: "#1F1B16"
+    lineColor: "#6B6258"
+    clusterBkg: "#FFF6EC"
+    clusterBorder: "#B8593E"
+    fontFamily: "Inter, system-ui, sans-serif"
+---
+flowchart TB
+  subgraph CALL["📞 During the call (low-latency hot path)"]
+    direction LR
+    NODE["Flow node<br/><i>e.g. mental_health_phq2</i>"]
+    NODE -->|every transition| PATCH["PATCH /calls/:id<br/><i>current_node</i>"]
+    NODE -->|on answer| POST["POST /patients/:id/phq<br/><i>score, instrument</i>"]
+    NODE -->|on red flag| ESC["POST /escalations<br/><i>category, severity, evidence</i>"]
+  end
+
+  PATCH --> SB["🗄️ Supabase Postgres"]
+  POST --> SB
+  ESC --> SB
+
+  SB -->|Realtime channel| UI["🖥️ Care team UI<br/><i>/live, /escalations</i>"]
+  ESC -.->|urgent severity| PAGE["📟 Page on-call nurse"]
+
+  classDef store fill:#FFFFFF,stroke:#E4D9C5,color:#1F1B16
+  classDef ui fill:#F7F1E6,stroke:#E4D9C5,color:#1F1B16
+  classDef alert fill:#F4D9D2,stroke:#B5402D,color:#1F1B16,stroke-width:2px
+  classDef node fill:#FFF6EC,stroke:#B8593E,color:#1F1B16
+
+  class NODE,PATCH,POST,ESC node
+  class SB store
+  class UI ui
+  class PAGE alert

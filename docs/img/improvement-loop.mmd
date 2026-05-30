@@ -1,0 +1,39 @@
+---
+config:
+  theme: base
+  themeVariables:
+    background: "#F7F1E6"
+    primaryColor: "#FFF6EC"
+    primaryBorderColor: "#B8593E"
+    primaryTextColor: "#1F1B16"
+    lineColor: "#6B6258"
+    fontFamily: "Inter, system-ui, sans-serif"
+---
+flowchart LR
+  LIVE["📞 Live calls<br/><i>real patients</i>"]
+  SIM["🧪 Cekura personas<br/><i>4 synthetic patients,<br/>run on demand</i>"]
+  AGENT["🎙️ timbre agent<br/><i>Pipecat + Nemotron + Flow graph</i>"]
+  LOG["📝 Transcripts +<br/>structured writes<br/><i>Supabase</i>"]
+  JUDGE["⚖️ LLM judge<br/><i>6-criterion rubric</i>"]
+  FAIL["🔍 Failure clusters<br/><i>node transitions,<br/>missed escalations,<br/>PII leaks, latency</i>"]
+  FIX["✍️ Prompt + Flow update<br/><i>scoped change,<br/>regression-tested</i>"]
+
+  LIVE --> AGENT
+  SIM --> AGENT
+  AGENT --> LOG
+  LOG --> JUDGE
+  JUDGE --> FAIL
+  FAIL --> FIX
+  FIX --> AGENT
+
+  classDef live fill:#FFF6EC,stroke:#B8593E,color:#1F1B16,stroke-width:2px
+  classDef store fill:#FFFFFF,stroke:#E4D9C5,color:#1F1B16
+  classDef eval fill:#EFE7D7,stroke:#C68A2E,color:#1F1B16
+  classDef judge fill:#F7E8CC,stroke:#C68A2E,color:#1F1B16
+  classDef fix fill:#F4D9D2,stroke:#B5402D,color:#1F1B16
+
+  class LIVE,AGENT live
+  class LOG store
+  class SIM eval
+  class JUDGE judge
+  class FAIL,FIX fix

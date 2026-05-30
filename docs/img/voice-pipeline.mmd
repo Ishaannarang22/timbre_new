@@ -1,0 +1,39 @@
+---
+config:
+  theme: base
+  themeVariables:
+    background: "#F7F1E6"
+    primaryColor: "#FFF6EC"
+    primaryBorderColor: "#B8593E"
+    primaryTextColor: "#1F1B16"
+    actorBkg: "#FFFFFF"
+    actorBorder: "#E4D9C5"
+    actorTextColor: "#1F1B16"
+    signalColor: "#6B6258"
+    signalTextColor: "#1F1B16"
+    noteBkgColor: "#EFE7D7"
+    noteBorderColor: "#C68A2E"
+    noteTextColor: "#1F1B16"
+    sequenceNumberColor: "#FFF6EC"
+    fontFamily: "Inter, system-ui, sans-serif"
+---
+sequenceDiagram
+  autonumber
+  participant P as Patient
+  participant TW as Twilio
+  participant ST as Deepgram STT
+  participant EP as SmartTurnV3<br/>(endpointing)
+  participant LM as NVIDIA Nemotron<br/>(LLM + Flows)
+  participant TT as Cartesia Sonic TTS
+  participant DB as Dashboard API
+
+  P->>TW: speech (μ-law 8kHz)
+  TW->>ST: WebSocket media frames
+  ST-->>EP: partial + final transcript
+  Note over EP: waits for true turn end<br/>(prosody, not just silence)
+  EP->>LM: "I haven't slept in three days..."
+  Note over LM: tool calls + reply<br/>(structured Flow state)
+  LM->>DB: POST /patients/:id/phq
+  LM->>TT: text chunks
+  TT-->>TW: streamed audio
+  TW->>P: voice reply
