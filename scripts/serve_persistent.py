@@ -77,6 +77,11 @@ URL_WAIT_S = 20.0             # cloudflared must print a URL within this
 EDGE_WAIT_S = 45.0            # the edge must route <url>/health within this (warm = generous)
 MONITOR_INTERVAL_S = 15.0     # how often we poll the live tunnel's health
 MONITOR_FAIL_GRACE = 3        # consecutive failed polls before we declare the tunnel dead
+MAX_BACKOFF_S = 600.0         # cap on the normal exponential bring-up backoff (was 60s)
+# trycloudflare throttles quick-tunnel CREATION with HTTP 429 / Cloudflare error 1015 when we
+# rotate too often. Retrying on a short backoff only PROLONGS the throttle, so when we detect a
+# rate-limit we cool down for this long instead of ramping the normal backoff.
+RATE_LIMIT_COOLDOWN_S = float(os.getenv("CF_RATE_LIMIT_COOLDOWN_S", "600"))
 
 
 def log(msg: str) -> None:
@@ -266,6 +271,18 @@ def start_server() -> subprocess.Popen:
     return proc
 
 
+def cloudflared_rate_limited() -> bool:
+    """True iff the most recent cloudflared attempt failed because trycloudflare is
+    RATE-LIMITING quick-tunnel creation (HTTP 429 / Cloudflare error 1015). In that state no
+    URL is ever printed, so open_tunnel() raises 'printed no URL'; we read cloudflared's own
+    log to tell a rate-limit apart from a generic failure and back off much harder."""
+    try:
+        txt = CF_LOG.read_text()
+    except OSError:
+        return False
+    return "429 Too Many Requests" in txt or "error code: 1015" in txt
+
+
 def open_tunnel() -> "tuple[subprocess.Popen, str]":
     """Open ONE fresh cloudflared quick-tunnel that actually routes /health.
 
@@ -336,11 +353,22 @@ class Daemon:
                 sync_twilio_webhook(url)
                 return url
             except RuntimeError as e:
-                log(f"[daemon] tunnel bring-up failed: {e} — retrying in {backoff:.0f}s")
                 kill_proc(self.tunnel, "cloudflared")
                 self.tunnel = None
-                self._stop.wait(backoff)
-                backoff = min(backoff * 1.5, 60.0)
+                if cloudflared_rate_limited():
+                    # Don't prolong the throttle: cool down for a long fixed interval and
+                    # reset the ramp, instead of poking trycloudflare again in ~60s.
+                    wait = RATE_LIMIT_COOLDOWN_S
+                    backoff = 5.0
+                    log(
+                        f"[daemon] tunnel bring-up failed: {e} — trycloudflare is RATE-LIMITING "
+                        f"quick tunnels (429/1015); cooling down {wait:.0f}s before retry"
+                    )
+                else:
+                    wait = backoff
+                    log(f"[daemon] tunnel bring-up failed: {e} — retrying in {wait:.0f}s")
+                    backoff = min(backoff * 1.5, MAX_BACKOFF_S)
+                self._stop.wait(wait)
         return ""
 
     def run(self) -> None:

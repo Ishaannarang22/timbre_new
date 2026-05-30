@@ -1,193 +1,115 @@
 """
-timbre — Pipecat Cloud entrypoint (Twilio Media Streams).
+timbre — Pipecat Cloud entrypoint (Twilio Media Streams) running the POSTPARTUM FLOW.
 
-This is the CLOUD form of the agent. Unlike src/twilio_bot.py (a self-hosted FastAPI server
-fronted by a cloudflared tunnel, where WE own /twiml and /ws), Pipecat Cloud hosts the
-websocket. Twilio points at wss://api.pipecat.daily.co/ws/twilio and the platform invokes the
-`bot(runner_args)` coroutine below with a live websocket. Works for BOTH:
+Unlike a self-hosted FastAPI server fronted by a cloudflared tunnel, Pipecat Cloud hosts the
+websocket: Twilio points at wss://api.pipecat.daily.co/ws/twilio and the platform invokes the
+`bot(runner_args)` coroutine below with a live websocket.
 
-  • inbound  — someone dials the Twilio number → TwiML Bin → Pipecat Cloud → bot()
-  • outbound — deploy/dialout_test.py places a Twilio call whose TwiML streams to the same agent
+This entrypoint drives the LLM with a Pipecat Flows `FlowManager` running the 7-node postpartum
+NodeConfig graph from `flows/postpartum.py` (Maya: identity → recovery → PHQ-2/9 → newborn →
+… → wrap-up, with emergency-escalation globals). Personas/tasks come from `prompts/prompts.json`.
 
-Pipeline (unchanged identity): Deepgram STT → NVIDIA Nemotron LLM → Cartesia TTS, at 8kHz μ-law.
+Pipeline identity: Deepgram STT → NVIDIA Nemotron LLM → Cartesia TTS, 8kHz μ-law, patient
+Smart-Turn v3 endpointing.
 
-v1 NOTE: endpointing here is Silero VAD only. The self-hosted bot uses a patient Smart-Turn v3
-prosody model; that ONNX dependency is omitted from the cloud image for a lean, reliable first
-build and is a planned fast-follow.
-
-WELLNESS SEAM: the personas below are warm placeholders. The real wellness/health-checkup system
-prompt (roadmap W1) and DB-backed tools (W3) plug in at `system_prompt()` / `run_bot()`.
+PHASE 1 (outbound): no live dashboard required. `build_dashboard_client()` no-ops when
+DASHBOARD_API_URL is unset, and we fall back to a generic patient ("there"). Inbound caller-ID
+identification + DB lookups are Phase 2 (needs the dashboard/Supabase deployed).
 """
 
 import os
-import re
+import sys
+from pathlib import Path
 
-from dotenv import load_dotenv
-from loguru import logger
+# The flow modules (flows/, prompts.py, dashboard_client.py) are bundled under ./src so the
+# repo's bare imports ("from flows.postpartum import ...", "from prompts import ...") resolve,
+# and prompts.py finds ./prompts/prompts.json via its parent.parent path logic.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import (
-    BotStoppedSpeakingFrame,
-    EndFrame,
-    Frame,
-    LLMFullResponseEndFrame,
-    LLMTextFrame,
-    TTSSpeakFrame,
-)
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_context import LLMContext, NOT_GIVEN
-from pipecat.processors.aggregators.llm_response_universal import (
+import asyncio  # noqa: E402
+
+from dotenv import load_dotenv  # noqa: E402
+from loguru import logger  # noqa: E402
+
+from pipecat.audio.vad.silero import SileroVADAnalyzer  # noqa: E402
+from pipecat.audio.vad.vad_analyzer import VADParams  # noqa: E402
+from pipecat.frames.frames import EndFrame, TTSSpeakFrame  # noqa: E402
+from pipecat.pipeline.pipeline import Pipeline  # noqa: E402
+from pipecat.pipeline.runner import PipelineRunner  # noqa: E402
+from pipecat.pipeline.task import PipelineParams, PipelineTask  # noqa: E402
+from pipecat.processors.aggregators.llm_context import LLMContext  # noqa: E402
+from pipecat.processors.aggregators.llm_response_universal import (  # noqa: E402
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.runner.types import RunnerArguments
-from pipecat.runner.utils import parse_telephony_websocket
-from pipecat.serializers.twilio import TwilioFrameSerializer
-from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
-from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.transports.websocket.fastapi import (
+from pipecat.runner.types import RunnerArguments  # noqa: E402
+from pipecat.runner.utils import parse_telephony_websocket  # noqa: E402
+from pipecat.serializers.twilio import TwilioFrameSerializer  # noqa: E402
+from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig  # noqa: E402
+from pipecat.services.deepgram.stt import DeepgramSTTService  # noqa: E402
+from pipecat.services.openai.llm import OpenAILLMService  # noqa: E402
+from pipecat.transports.websocket.fastapi import (  # noqa: E402
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
-from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
-from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy  # noqa: E402
+from pipecat.turns.user_turn_strategies import UserTurnStrategies  # noqa: E402
+from pipecat_flows import FlowManager  # noqa: E402
+
+from dashboard_client import build_dashboard_client, redact  # noqa: E402
+from flows.postpartum import (  # noqa: E402
+    build_global_functions,
+    build_mother_recovery_node,
+    initial_node,
+    set_flow_context,
+)
 
 load_dotenv(override=True)
 
-# --- Config (same knobs as the self-hosted bot; values come from the secret set) ----------
-CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID") or "e07c00bc-4134-4eae-9ea4-1a55fb45746b"  # Brooke
+# --- Config (values come from the Pipecat Cloud secret set) -------------------------------
+CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID") or "e07c00bc-4134-4eae-9ea4-1a55fb45746b"
 CARTESIA_SPEED = float(os.getenv("CARTESIA_SPEED", "0.95"))
 LLM_MODEL = os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
-MAX_CALL_SECS = float(os.getenv("MAX_CALL_SECS", "300"))
+MAX_CALL_SECS = float(os.getenv("POSTPARTUM_MAX_CALL_SECS", "900"))  # postpartum calls run long
 SR = 8000
 
-# --- ENDPOINTING -------------------------------------------------------------------------
-# VAD is just the TRIGGER: a short silence wakes the turn decision. Smart-Turn v3 (a prosody
-# model) makes the real call, so the agent waits out mid-sentence pauses instead of barging in
-# — important for wellness calls, where people pause to think or get emotional.
-#
-# In Pipecat 1.3.0 the patience knob is SmartTurnParams.confidence_threshold (NOT the old
-# completion_threshold). Source: `prediction = 1 if probability >= confidence_threshold else 0`,
-# where probability = "the turn is complete". So a HIGHER threshold = MORE patient (needs more
-# certainty before ending the turn). Default is 0.5; we raise it to be deliberately patient.
-VAD_STOP_SECS = float(os.getenv("VAD_STOP_SECS", "0.4"))           # short trigger
-SMART_TURN_STOP_SECS = float(os.getenv("SMART_TURN_STOP_SECS", "2.5"))   # hard ceiling
-SMART_TURN_CONFIDENCE = float(os.getenv("SMART_TURN_CONFIDENCE", "0.7"))  # >0.5 = more patient
+VAD_STOP_SECS = float(os.getenv("VAD_STOP_SECS", "0.4"))
+# ENDPOINTING: Smart-Turn v3's ONNX model is NOT present in the Pipecat Cloud image (confirmed:
+# it never loads / produces 0 predictions in cloud logs), which left user turns unable to STOP —
+# the agent "couldn't listen." So in the cloud we endpoint on Silero VAD via a speech-timeout
+# stop strategy (VAD loads fine here). user_speech_timeout = silence after speech that ends the
+# turn; higher = more patient (won't cut someone off mid-thought) but adds response latency.
+USER_SPEECH_TIMEOUT = float(os.getenv("USER_SPEECH_TIMEOUT", "0.8"))
 
 
-class PatientSmartTurnV3(LocalSmartTurnAnalyzerV3):
-    """Smart Turn v3 with a tunable "are you done?" confidence threshold.
-
-    NOTE on the API: SmartTurnParams exposes only stop_secs / pre_speech_ms / max_duration_secs
-    — there is NO confidence/threshold parameter. Upstream hardcodes the complete/incomplete
-    decision at probability > 0.5, so a borderline pause (model only 51% sure you've finished)
-    ends the turn mid-thought. We keep the exact ONNX model + audio handling and only re-apply
-    the cutoff here: HIGHER threshold = MORE patient (the model must be quite sure you're done,
-    so mid-sentence pauses stay INCOMPLETE). On a wellness call this is what stops the agent
-    from talking over someone who is still gathering their thoughts. (Mirrors the self-hosted
-    bot's src/turn_helpers.py.)
-    """
-
-    def __init__(self, *, completion_threshold: float = 0.7, **kwargs):
-        super().__init__(**kwargs)
-        self._completion_threshold = completion_threshold
-
-    def _predict_endpoint(self, audio_array):
-        result = super()._predict_endpoint(audio_array)  # run the model unchanged
-        result["prediction"] = 1 if result["probability"] > self._completion_threshold else 0
-        return result
-
-INBOUND_GREETING = "Hi there, thanks for calling. How are you feeling today?"
-OUTBOUND_GREETING = "Hi, this is a follow-up call from your care team, just checking in on how you've been since your visit. How are you feeling?"
-
-# Genuine sign-offs (matched on the agent's COMPLETED turn → auto-hangup).
-GOODBYE_RE = re.compile(
-    r"\b(good ?bye|bye now|bye bye|talk (to you )?soon|"
-    r"take care(\s*,?\s*\w+)?\s*[.!]|"
-    r"have a (great|wonderful|good) (day|one)\b)",
-    re.IGNORECASE,
-)
-GOODBYE_TAIL_RE = re.compile(r"(good ?bye|bye)\s*[.!]*\s*$", re.IGNORECASE)
-
-
-def system_prompt() -> str:
-    # WELLNESS SEAM (W1): replace this with the real health-checkup persona + context.
+def build_greeting(preferred: str, language: str) -> str:
+    if language == "es":
+        return (
+            f"Hola {preferred}, soy Maya de Raya Memorial llamando para ver cómo "
+            "estás tú y el bebé. ¿Es un buen momento?"
+        )
     return (
-        "You are a warm, attentive wellness companion on a short phone call. Everything you say "
-        "is spoken aloud over a phone, so keep every turn to 1-3 short, natural sentences. No "
-        "markdown, no lists, no emoji, no stage directions.\n\n"
-        "The call is ALREADY in progress. You have already greeted the person and asked how they "
-        "are feeling. Respond ONLY to their most recent message. Do NOT greet them again or repeat "
-        "yourself. Gently check in on how they're doing — their mood, sleep, energy, anything on "
-        "their mind. Be supportive and unhurried; you offer wellness check-ins and encouragement, "
-        "not diagnosis. When they're done, warmly say a clear goodbye."
+        f"Hi {preferred}, this is Maya from Raya Memorial calling to check in "
+        "on you and the baby. Is this a good time?"
     )
 
 
-def detect_goodbye(text: str) -> bool:
-    return bool(GOODBYE_RE.search(text) or GOODBYE_TAIL_RE.search(text))
-
-
-class GoodbyeProcessor(FrameProcessor):
-    """Ends the call shortly after the AGENT says a genuine goodbye, but only after at least one
-    real generated exchange (so a stray farewell-ish phrase in the first reply can't drop the
-    call). Sits after the LLM; queues an EndFrame once the farewell has finished playing — the
-    Twilio serializer's auto_hang_up then drops the real call. MAX_CALL_SECS is the backstop."""
-
-    def __init__(self):
-        super().__init__()
-        self.task: PipelineTask | None = None
-        self._buffer = ""
-        self._turns = 0
-        self._armed = False
-        self._ending = False
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        await super().process_frame(frame, direction)
-        if isinstance(frame, LLMTextFrame):
-            self._buffer += frame.text
-        elif isinstance(frame, LLMFullResponseEndFrame):
-            text = self._buffer.strip()
-            self._buffer = ""
-            if text:
-                self._turns += 1
-                if not self._armed and self._turns >= 1 and detect_goodbye(text):
-                    logger.info(f"genuine goodbye detected (turn {self._turns}) -> will hang up: {text!r}")
-                    self._armed = True
-        elif (
-            isinstance(frame, BotStoppedSpeakingFrame)
-            and self._armed
-            and not self._ending
-            and self.task is not None
-        ):
-            self._ending = True
-            logger.info("farewell finished speaking -> queueing EndFrame (auto hang up)")
-            await self.task.queue_frame(EndFrame())
-        await self.push_frame(frame, direction)
-
-
-async def run_bot(transport: FastAPIWebsocketTransport, handle_sigint: bool, greeting: str):
+async def run_postpartum(transport: FastAPIWebsocketTransport, handle_sigint: bool, *,
+                         patient: dict, newborn: dict | None, language: str,
+                         call_sid: str, dashboard, greeting: str,
+                         had_profile: bool) -> None:
     stt = DeepgramSTTService(api_key=os.environ["DEEPGRAM_API_KEY"], sample_rate=SR)
     llm = OpenAILLMService(
         api_key=os.environ["NVIDIA_API_KEY"],
         base_url="https://integrate.api.nvidia.com/v1",
         model=LLM_MODEL,
         params=OpenAILLMService.InputParams(
-            temperature=0.3,
+            temperature=0.2,
             top_p=0.95,
             max_tokens=4096,
-            # Nemotron-nano secretly reasons into reasoning_content → slow first word; disable it.
             extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
         ),
     )
-    # Cap the free endpoint's documented tail latency; the SDK retries fresh.
     llm._client = llm._client.with_options(timeout=8.0, max_retries=2)
     tts = CartesiaTTSService(
         api_key=os.environ["CARTESIA_API_KEY"],
@@ -198,43 +120,24 @@ async def run_bot(transport: FastAPIWebsocketTransport, handle_sigint: bool, gre
         ),
     )
 
-    # Seed the context so the model's history shows it has ALREADY greeted (the greeting is
-    # spoken once as a fixed line below). Paired with the prompt's "don't greet again", the
-    # model just continues the conversation instead of restarting the intro on interruptions.
-    context = LLMContext(
-        messages=[
-            {"role": "system", "content": system_prompt()},
-            {"role": "assistant", "content": greeting},
-        ],
-        tools=NOT_GIVEN,
-    )
-
-    # Patient endpointing: a prosody model (not a silence timer) decides when the caller is
-    # done. NOTE: each cloud call builds a fresh analyzer, which loads the Smart-Turn v3 ONNX
-    # model (~0.5-1s on first turn). The self-hosted bot warm-loads it once at process startup;
-    # there's no equivalent cross-call warm cache in a per-call cloud worker, so we accept the
-    # one-time per-call load here.
-    turn_analyzer = PatientSmartTurnV3(
-        completion_threshold=SMART_TURN_CONFIDENCE,
-        params=SmartTurnParams(stop_secs=SMART_TURN_STOP_SECS),
-    )
+    # Pipecat Flows owns the LLM context across node transitions, so we hand it an empty
+    # LLMContext and let FlowManager.initialize set up the first node's system + tool schema.
+    context = LLMContext()
     aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
             user_turn_strategies=UserTurnStrategies(
-                stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn_analyzer)]
+                stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=USER_SPEECH_TIMEOUT)]
             )
         ),
     )
 
-    goodbye = GoodbyeProcessor()
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
             aggregator.user(),
             llm,
-            goodbye,
             tts,
             transport.output(),
             aggregator.assistant(),
@@ -248,39 +151,114 @@ async def run_bot(transport: FastAPIWebsocketTransport, handle_sigint: bool, gre
             audio_out_sample_rate=SR,
         ),
     )
-    goodbye.task = task
+
+    call_id = f"cloud-{call_sid[-8:]}" if call_sid else "cloud-unknown"
+    flow_manager = FlowManager(
+        worker=task,
+        llm=llm,
+        context_aggregator=aggregator,
+        transport=transport,
+        global_functions=build_global_functions(),
+    )
+    set_flow_context(
+        flow_manager,
+        client=dashboard,
+        patient=patient,
+        newborn=newborn,
+        call_id=call_id,
+        language=language,
+    )
+
+    # Identity verification needs a loaded patient record (a DOB to match against). With no
+    # record (Phase-1 test / no dashboard), that node can't resolve and the model loops asking
+    # name+DOB forever — so we skip straight to the recovery check-in. With a real profile we
+    # start at identity_verify as designed.
+    start_node = initial_node(flow_manager) if had_profile else build_mother_recovery_node(flow_manager)
 
     @transport.event_handler("on_client_connected")
     async def _greet(_t, _c):
-        # Speak the opening as a FIXED line exactly once (not an LLM run), so an interruption
-        # can't trigger a regeneration that loops the intro. Already in context above, so we
-        # don't append it a second time.
-        await task.queue_frames([TTSSpeakFrame(greeting, append_to_context=False)])
+        await asyncio.sleep(0.3)
+        await task.queue_frames([TTSSpeakFrame(greeting, append_to_context=True)])
+        await flow_manager.initialize(start_node)
 
     @transport.event_handler("on_client_disconnected")
     async def _bye(_t, _c):
+        try:
+            messages = flow_manager.get_current_context() or []
+            transcript = "\n".join(
+                f"{m.get('role','?')}: {m.get('content','')}"
+                for m in messages
+                if isinstance(m, dict) and m.get("content")
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"transcript dump failed: {e}")
+            transcript = ""
+        try:
+            await dashboard.update_call(call_id, status="completed",
+                                        transcript_redacted=redact(transcript)[:200_000])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"final update_call failed: {e}")
+        if hasattr(dashboard, "aclose"):
+            try:
+                await dashboard.aclose()
+            except Exception:  # noqa: BLE001
+                pass
         await task.cancel()
 
+    async def _max_duration_guard() -> None:
+        await asyncio.sleep(MAX_CALL_SECS)
+        logger.info("postpartum max call duration reached — ending call")
+        await task.queue_frames([EndFrame()])
+
     runner = PipelineRunner(handle_sigint=handle_sigint)
-    await runner.run(task)
+    guard = asyncio.create_task(_max_duration_guard())
+    try:
+        await runner.run(task)
+    finally:
+        guard.cancel()
 
 
 async def bot(runner_args: RunnerArguments):
     """Pipecat Cloud entrypoint. The platform hands us a live Twilio Media Streams websocket."""
     _transport_type, call_data = await parse_telephony_websocket(runner_args.websocket)
-
-    # Custom <Parameter>s from the TwiML land in call_data["body"]. Our outbound dialout TwiML
-    # sets direction=outbound; inbound calls carry nothing, so we default to the inbound persona.
     body = call_data.get("body", {}) or {}
     direction = str(body.get("direction", "inbound")).lower()
-    greeting = OUTBOUND_GREETING if direction == "outbound" else INBOUND_GREETING
-    logger.info(f"bot() starting — direction={direction} call_sid={call_data.get('call_id')}")
+    call_sid = call_data.get("call_id", "") or ""
+
+    # PHASE 1: patient comes from the dialout <Parameter>s (or a fallback). Inbound caller-ID
+    # → DB identification is Phase 2 (needs the dashboard live).
+    dashboard = build_dashboard_client()
+    patient_id = str(body.get("patient_id", "") or "")
+    preferred = str(body.get("preferred_name", "") or "").strip() or "there"
+    language = str(body.get("language", "en") or "en").lower()
+    if language != "es":
+        language = "en"
+
+    profile = {}
+    if patient_id:
+        try:
+            profile = await dashboard.get_patient_profile(patient_id) or {}
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"get_patient_profile({patient_id}) failed; using fallback: {e}")
+    had_profile = bool(profile.get("patient"))
+    patient = profile.get("patient") or {
+        "id": patient_id or "unknown",
+        "preferred_name": preferred,
+        "language": language,
+    }
+    newborns = profile.get("newborns") or []
+    newborn = newborns[0] if newborns else None
+    preferred = patient.get("preferred_name") or (patient.get("name", "there").split() or ["there"])[0]
+    greeting = build_greeting(preferred, language)
+
+    logger.info(f"bot() postpartum start — direction={direction} call_sid={call_sid} "
+                f"patient_id={patient_id or '(none)'} language={language}")
 
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
-        call_sid=call_data["call_id"],
+        call_sid=call_sid,
         account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
-        auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),  # lets Pipecat hang up at the end
+        auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
     )
     transport = FastAPIWebsocketTransport(
         websocket=runner_args.websocket,
@@ -294,11 +272,14 @@ async def bot(runner_args: RunnerArguments):
             serializer=serializer,
         ),
     )
-    await run_bot(transport, runner_args.handle_sigint, greeting)
+    await run_postpartum(
+        transport, runner_args.handle_sigint,
+        patient=patient, newborn=newborn, language=language,
+        call_sid=call_sid, dashboard=dashboard, greeting=greeting,
+        had_profile=had_profile,
+    )
 
 
 if __name__ == "__main__":
-    # Local dev: `python bot.py --transport twilio` runs Pipecat's dev runner (FastAPI on :7860).
     from pipecat.runner.run import main
-
     main()

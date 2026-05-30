@@ -12,5 +12,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --locked --no-install-project --no-dev
 
-# Copy the application code (the Pipecat Cloud base image imports bot.bot)
+# Copy the application code (the Pipecat Cloud base image imports bot.bot).
+# The postpartum flow modules are bundled under ./src and prompts under ./prompts;
+# bot.py puts ./src on sys.path and prompts.py resolves ./prompts/prompts.json.
 COPY ./bot.py bot.py
+COPY ./src ./src
+COPY ./prompts ./prompts
