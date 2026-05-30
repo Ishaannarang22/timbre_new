@@ -8,8 +8,8 @@ export const GET = withAgentGet(async ({ db }) => {
     .from("call")
     .select(
       `id, patient_id, direction, status, language, scheduled_at, started_at, current_node, flow_name,
-       patient:patient_id ( id, name, preferred_name, language, phone, birth_date, birth_type, discharge_date, primary_provider, doula_assigned, notes ),
-       newborns:newborn ( id, name, dob, sex, feeding_type )`,
+       patient:patient_id ( id, name, preferred_name, language, phone, birth_date, birth_type, discharge_date, primary_provider, doula_assigned, notes,
+         newborns:newborn ( id, name, dob, sex, feeding_type ) )`,
     )
     .in("status", ["queued", "in_progress"])
     .order("scheduled_at", { ascending: true })
