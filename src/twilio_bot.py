@@ -39,8 +39,6 @@ from pipecat.frames.frames import (
     LLMTextFrame,
     TTSSpeakFrame,
 )
-from pipecat.adapters.schemas.function_schema import FunctionSchema
-from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -67,19 +65,11 @@ load_dotenv()
 from call_me import generate_quote  # noqa: E402  (resilient Nemotron quote + fallback)
 from turn_helpers import PatientSmartTurnV3  # noqa: E402  (shared patient endpointer)
 
-# M3+ tooling: the 93-tool mac_tools registry + GLM factory replace the 7 hand-written Mac
-# tools that used to live here. The registry's media.py wraps the SAME mac_actions functions
-# (set_volume/play_music/…), so behaviour for the original tools is preserved — they're just
-# now part of a much larger, hot-extensible surface. agent_memory gives the agent cross-call
-# memory. Both packages live under src/ (cwd=src in the daemon), same as call_me/turn_helpers.
-import mac_tools  # noqa: E402  (REGISTRY, dispatch, ConfirmationBroker, factory, load_all)
-import mac_tools.factory  # noqa: E402  (create_tool — dynamic GLM tool authoring)
-import agent_memory  # noqa: E402  (CallRecorder + recall — cross-call memory)
-
-# Populate the registry ONCE at import/startup (idempotent). Importing mac_tools alone
-# registers nothing; load_all() runs every category's @tool decorators (and any generated
-# tools). Doing it here means the daemon pays the cost once, at boot, not per call.
-mac_tools.load_all()
+# agent_memory gives the agent cross-call memory (CallRecorder + recall). It lives under
+# src/ (cwd=src in the daemon), same as call_me/turn_helpers. The voice-controlled Mac
+# harness that used to live here (a large tool registry + a GLM tool factory) has been
+# removed; this is now a tools-less voice agent.
+import agent_memory  # noqa: E402  (CallRecorder + recall - cross-call memory)
 
 # --- The voice. THIS is "our voice" — Cartesia Sonic, same id as the local bot. --------
 CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID") or "e07c00bc-4134-4eae-9ea4-1a55fb45746b"  # Brooke
@@ -277,91 +267,8 @@ def system_prompt(quote: str) -> str:
         f"{quote}\n\n"
         "After the quote, chat naturally for a moment — invite his reaction, relate it to his day. "
         "Keep it light and genuine. After a couple of short exchanges, warmly wrap up and say a "
-        f"clear goodbye to {TARGET_NAME}.\n\n"
-        + _mac_control_block()
+        f"clear goodbye to {TARGET_NAME}."
     )
-
-
-def _mac_control_block() -> str:
-    """The shared MAC CONTROL + protocols block for the AUTHORIZED personas (outbound morning
-    call and inbound assistant).
-
-    CRITICAL design rule (see the tool-narration post-mortem): this block describes WHAT the
-    agent can do in CONCEPTS, and never names a tool or shows its call syntax in prose. The old
-    version spelled out 'Use set_volume / change_volume', 'play_music query "Ed Sheeran"', etc.
-    On the build.nvidia.com Nemotron-nano endpoint that actively TAUGHT the model to *narrate*
-    actions as text — it spoke '(Using set_volume with level 0.)' instead of emitting a tool
-    call, and once one prose-narration turn lands in history the model imitates itself and stops
-    calling tools for the rest of the call. Tool NAMES + arg shapes live in the tool schemas
-    (REGISTRY.tools_schema()), which is where the model should read them; the prompt only needs
-    to describe situations and the ONE hard rule: to act, use a tool — never write the action."""
-    return (
-        "You can control this Mac: its volume and music, apps and windows, files, the web and "
-        "browser, notes, reminders and calendar, messages and mail, screenshots, the clipboard, "
-        "system settings, and more.\n"
-        "THE ONE RULE THAT MATTERS MOST: to take ANY action on this computer you MUST use one of "
-        "your tools. Never describe an action, never name a tool, and never say you have done "
-        "something unless a tool has actually run and given you a result. When the user asks for "
-        "something, use the right tool FIRST and say nothing until it returns; then say ONE short, "
-        "natural sentence about what happened. This holds even if earlier in this call you talked "
-        "about an action in words — from now on, always use the tool.\n"
-        "There are two separate kinds of loudness and you must choose the right one. One is the "
-        "computer's overall output volume. The other is the music player's own playback volume. "
-        "When the user is talking about the SONG or the MUSIC itself being too loud or quiet "
-        "('turn the music down', 'make the song quieter', 'lower it' while music plays, 'turn it "
-        "up'), change the music player's volume; for the computer's general loudness, change the "
-        "system output volume. To put on something specific to listen to, start it by name; to "
-        "pause, resume, or skip whatever is already playing, use the playback control.\n\n"
-        "CONFIRM: If a tool comes back saying it needs confirmation, do NOT go further — read the "
-        "action back in one short sentence and ask the user to confirm. Only if they clearly say "
-        "yes, confirm it; if they decline, cancel it. Never send, delete, or do anything "
-        "disruptive without this confirm step.\n\n"
-        "NEW ABILITIES: If the user asks for something you have no tool for, tell them you don't "
-        "have that ability yet but will build it — it takes a few seconds — then ask for it to be "
-        "built. Once it is ready, use the new tool to do what they asked.\n\n"
-        "MEMORY: You remember past calls — recall things the user refers back to, and save "
-        "anything they ask you to remember.\n\n"
-        "SECRETS: You can never access passwords, keychain items, SSH keys, or secret files; if "
-        "asked, say you're not able to do that."
-    )
-
-
-def _seed_tool_example() -> list[dict]:
-    """Seed ONE proper tool-call exchange into an AUTHORIZED call's context, right after the
-    greeting, so the model's DOMINANT in-context pattern is 'call a tool', not 'narrate in prose'.
-
-    Why this is necessary (and not just a prompt tweak): Nemotron-nano on build.nvidia.com is
-    strongly imitative. Empirically (verified against the live endpoint), once a single assistant
-    turn is recorded as a prose narration of an action with no tool_call, the model copies that
-    pattern and NEVER calls a tool again for the rest of the call — and NO system-prompt wording
-    overrides this (a hard 'always use the tool even if you described it before' rule failed 5/5
-    against poisoned history). Seeding one real structured call here makes tool-calling the
-    established behaviour and RECOVERS tool use even after a stray narration (5/5 in testing).
-
-    The seeded exchange is a harmless read-only status check (get_dark_mode); its result is not a
-    fact the user asked for, so the placeholder can't mislead — and if the user does ask about
-    dark mode, the model simply calls the tool again. Returned as plain context messages: seeded
-    messages are NOT spoken (only TTSSpeakFrame / live LLM output reaches the caller)."""
-    return [
-        {"role": "user", "content": "Quick check — can you actually do things on my Mac?"},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "seed_tool_example",
-                    "type": "function",
-                    "function": {"name": "get_dark_mode", "arguments": "{}"},
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "seed_tool_example",
-            "content": '{"result": "Dark mode is on."}',
-        },
-        {"role": "assistant", "content": "Yep, I'm hooked in and ready — what do you need?"},
-    ]
 
 
 def no_tools_system_prompt() -> str:
@@ -384,12 +291,10 @@ def no_tools_system_prompt() -> str:
 
 
 def inbound_system_prompt() -> str:
-    # INBOUND persona: Ishaan dialed US. This is a warm, concise phone assistant that can
-    # control his Mac and chat briefly — NO motivational quote, NO morning framing. The
-    # opening line (INBOUND_GREETING) is spoken deterministically once and seeded as the
-    # assistant's first turn, so — exactly like the outbound flow — the model must NOT greet
-    # again. The MAC CONTROL block below is intentionally identical in intent to the outbound
-    # prompt so the SAME tools behave the same way.
+    # INBOUND persona: Ishaan dialed in. A warm, concise phone assistant that chats
+    # briefly. NO motivational quote, NO morning framing. The opening line
+    # (INBOUND_GREETING) is spoken deterministically once and seeded as the assistant's
+    # first turn, so the model must NOT greet again.
     return (
         f"You are {TARGET_NAME}'s warm, concise personal phone assistant. He just CALLED you. "
         "Everything you say is spoken aloud over a phone, so keep every turn to 1-3 short, natural "
@@ -398,206 +303,8 @@ def inbound_system_prompt() -> str:
         "he needs. Respond ONLY to his most recent message. Do NOT greet him again, do NOT say hi, "
         "hello, or hey again, and do NOT repeat anything you have already said. Help him quickly "
         "and naturally, then briefly chat if he wants. When he's done and says goodbye, warmly say "
-        "a clear goodbye back.\n\n"
-        + _mac_control_block()
+        "a clear goodbye back."
     )
-
-
-# --- VOICE-CONTROLLED MAC HARNESS (native function calling, registry-backed) --------------
-# Nemotron on the build.nvidia.com endpoint supports OpenAI-style tool calls (verified:
-# `finish_reason=tool_calls`, populated `message.tool_calls`), so we use Pipecat's NATIVE
-# function calling. The tools the model is offered now come from the mac_tools REGISTRY (93
-# tools across 17 categories, including the original volume/music tools via media.py) rather
-# than the 7 hand-written schemas that used to live here. build_tools_and_register() below
-# wires the whole registry + the confirm/cancel/request_new_tool control tools onto the LLM,
-# routing every dispatch through mac_tools.dispatch (which clamps/validates/audits and gates
-# CONFIRM actions on the per-call ConfirmationBroker). osascript runs in a worker thread so a
-# blocking action never stalls the event loop.
-
-
-class _TaskHolder:
-    """Tiny mutable box the tool adapters close over. The PipelineTask doesn't exist yet when
-    we register the adapters (it needs the pipeline, which needs the LLM with tools already
-    registered), so request_new_tool's filler frame is queued via this holder's .task, which
-    /ws sets right after the task is created."""
-
-    __slots__ = ("task",)
-
-    def __init__(self) -> None:
-        self.task = None
-
-
-def build_tools_and_register(llm, context, broker, recorder, task_holder) -> None:
-    """Wire the FULL mac_tools registry (plus the confirm/cancel/request_new_tool control
-    tools) onto a live LLM + context for ONE authorized call. Mirrors the contract's
-    `register_all` integration handle and the factory's adapter shape.
-
-    For each ENABLED registry tool we register an async adapter that:
-      1) runs mac_tools.dispatch(name, args, broker) in a worker THREAD (so blocking osascript
-         never stalls the event loop — dispatch never raises and SAFE runs now / CONFIRM stages
-         on the broker),
-      2) best-effort records the action to memory (recorder.action), and
-      3) speaks the result back via result_callback.
-
-    Plus three control tools NOT in the registry:
-      * confirm_action / cancel_action — drive the per-call ConfirmationBroker (CONFIRM gating).
-      * request_new_tool — the GLM factory: immediately queue a spoken filler, then build the
-        tool off-loop, then report a short result. NEVER raises into the pipeline.
-
-    The caller (/ws) must pass authorized_tools_schema() into the context so these tools are
-    actually OFFERED to the model (register_function only wires the handler).
-    """
-
-    def _make_adapter(tool_name: str):
-        async def _adapter(params) -> None:
-            try:
-                args = getattr(params, "arguments", {}) or {}
-                result = await asyncio.to_thread(mac_tools.dispatch, tool_name, args, broker)
-            except Exception:  # noqa: BLE001 — dispatch shouldn't raise, but never crash here
-                result = {"result": "Sorry, that didn't work."}
-            # Best-effort memory capture of the action (scrubbed inside the recorder). The
-            # spoken result string lives under "result"; CONFIRM read-backs are captured too.
-            # recorder.action already swallows all its own exceptions internally (it can't
-            # raise), so no outer guard is needed here.
-            recorder.action(
-                tool_name, getattr(params, "arguments", {}) or {}, result.get("result")
-            )
-            await params.result_callback(result)
-
-        return _adapter
-
-    # Register one adapter per ENABLED registry tool (the SAME set offered in tools_schema()).
-    for spec in mac_tools.REGISTRY.specs(enabled_only=True):
-        llm.register_function(spec.name, _make_adapter(spec.name))
-
-    # --- CONFIRM/CANCEL control tools: drive the per-call ConfirmationBroker -------------
-    async def _confirm_action(params) -> None:
-        try:
-            msg = await asyncio.to_thread(broker.confirm)
-        except Exception:  # noqa: BLE001 — broker.confirm already swallows; belt-and-suspenders
-            msg = "Sorry, that didn't work."
-        recorder.action("confirm_action", {}, msg)  # recorder.action never raises
-        await params.result_callback({"result": msg})
-
-    async def _cancel_action(params) -> None:
-        try:
-            msg = await asyncio.to_thread(broker.cancel)
-        except Exception:  # noqa: BLE001
-            msg = "Okay, cancelled."
-        recorder.action("cancel_action", {}, msg)  # recorder.action never raises
-        await params.result_callback({"result": msg})
-
-    llm.register_function("confirm_action", _confirm_action)
-    llm.register_function("cancel_action", _cancel_action)
-
-    # --- request_new_tool: the GLM factory. Slow (a GLM round-trip), so we (a) speak a filler
-    # the moment it's called, then (b) build off-loop, then (c) report a short spoken result.
-    # NEVER raises into the pipeline.
-    async def _request_new_tool(params) -> None:
-        try:
-            description = (getattr(params, "arguments", {}) or {}).get("description", "") or ""
-        except Exception:  # noqa: BLE001
-            description = ""
-
-        # (a) Immediate spoken filler so the caller hears it's working. append_to_context=False
-        # so this aside doesn't pollute the model's transcript. Best-effort: a queue failure
-        # must not stop the build.
-        try:
-            if task_holder.task is not None:
-                await task_holder.task.queue_frame(
-                    TTSSpeakFrame(
-                        "Give me a few seconds — I don't have that yet, so I'm building it "
-                        "right now.",
-                        append_to_context=False,
-                    )
-                )
-        except Exception:  # noqa: BLE001
-            pass
-
-        # (b) Build it off the event loop (a network round-trip + validation + file write).
-        # create_tool NEVER raises; it returns {ok, tool_name, risk, message}. We pass the
-        # LIVE llm+context+broker so a SAFE tool is HOT-ADDED to THIS call (usable next turn).
-        try:
-            res = await asyncio.to_thread(
-                mac_tools.factory.create_tool,
-                description,
-                llm=llm,
-                context=context,
-                broker=broker,
-                call_id=getattr(recorder, "call_sid", None),
-            )
-        except Exception:  # noqa: BLE001 — absolute backstop; create_tool shouldn't raise
-            res = {"ok": False, "tool_name": None, "message": "Something went wrong building that."}
-
-        # (c) Speak a short, natural result. On ok+SAFE, name the tool so the model uses it
-        # next turn; on a gated/risky build, say it needs approval; on failure, apologize.
-        ok = bool(res.get("ok"))
-        tool_name = res.get("tool_name")
-        risk = res.get("risk")
-        if ok and tool_name and risk == "safe":
-            spoken = f"Done — I just added a tool called {tool_name}."
-        elif ok and tool_name:
-            spoken = (
-                f"I built a tool called {tool_name}, but it does something risky, so it needs "
-                "your approval before I can use it."
-            )
-        else:
-            spoken = res.get("message") or "Sorry, I couldn't build that just now."
-
-        recorder.action("request_new_tool", {"description": description}, spoken)  # never raises
-        await params.result_callback({"result": spoken})
-
-    llm.register_function("request_new_tool", _request_new_tool)
-
-
-def _control_tools_schema_extras() -> list:
-    """The pipecat FunctionSchemas for the three CONTROL tools (confirm/cancel/request_new_tool)
-    that are NOT in the registry. We append these to REGISTRY.tools_schema() so the model is
-    actually OFFERED them (register_function only wires the handler; the schema advertises it)."""
-    return [
-        FunctionSchema(
-            name="confirm_action",
-            description=(
-                "Confirm and carry out the action you just read back to the user. Call this "
-                "ONLY after the user clearly says yes to a needs_confirmation read-back."
-            ),
-            properties={},
-            required=[],
-        ),
-        FunctionSchema(
-            name="cancel_action",
-            description=(
-                "Cancel the pending action you read back to the user. Call this when the user "
-                "declines a needs_confirmation read-back."
-            ),
-            properties={},
-            required=[],
-        ),
-        FunctionSchema(
-            name="request_new_tool",
-            description=(
-                "Build a brand-new tool when the user asks for something you have NO existing "
-                "tool for. Pass a clear plain-English description of what the tool should do. "
-                "Building takes a few seconds; tell the user you're building it, then once it's "
-                "ready use the new tool to do what they asked."
-            ),
-            properties={
-                "description": {
-                    "type": "string",
-                    "description": "Plain-English description of the tool to build.",
-                }
-            },
-            required=["description"],
-        ),
-    ]
-
-
-def authorized_tools_schema() -> ToolsSchema:
-    """The full ToolsSchema offered to an AUTHORIZED caller: every enabled registry tool plus
-    the confirm/cancel/request_new_tool control tools."""
-    standard = list(mac_tools.REGISTRY.tools_schema().standard_tools)
-    standard.extend(_control_tools_schema_extras())
-    return ToolsSchema(standard_tools=standard)
 
 
 def _strip_quote(text: str, quote: str) -> str:
@@ -929,14 +636,12 @@ async def ws(websocket: WebSocket) -> None:
         ),
     )
 
-    # --- Build the system prompt + tool surface based on AUTHORIZATION --------------------
-    # AUTHORIZED: full registry tools + GLM factory + cross-call memory. The persona is the
-    # morning-quote flow (outbound) or the assistant flow (inbound), both with the general
-    # MAC CONTROL + protocols block. We also splice in any remembered facts about this caller.
-    # UNAUTHORIZED: NO tools, the friendly no-tools persona, NO factory/registry/broker/memory.
-    broker = None
+    # --- Build the system prompt based on AUTHORIZATION ----------------------------------
+    # AUTHORIZED: the morning-quote persona (outbound) or the assistant persona (inbound),
+    # plus cross-call memory (we splice in any remembered facts about this caller). No tools.
+    # UNAUTHORIZED: the friendly no-tools persona, no memory. Neither path offers any tools
+    # (the voice-controlled Mac harness was removed).
     recorder = None
-    task_holder = _TaskHolder()
     if authorized:
         # Cross-call memory: recall() returns "" for an unknown/first-time caller (so the prompt
         # is unchanged), or a compact "Things to remember about this caller:" block we append.
@@ -948,11 +653,9 @@ async def ws(websocket: WebSocket) -> None:
             mem = ""
         prompt = (base_prompt + "\n\n" + mem) if mem else base_prompt
 
-        # Per-call confirmation broker (CONFIRM gating) + recorder (capture this call for the
-        # memory store; finalized in the `finally` below).
-        broker = mac_tools.ConfirmationBroker()
+        # Recorder captures this call for the memory store (finalized in the `finally` below).
         recorder = agent_memory.CallRecorder(call_sid, direction=mode, caller=caller)
-        tools = authorized_tools_schema()  # full registry + confirm/cancel/request_new_tool
+        tools = NOT_GIVEN  # tools-less voice agent: no Mac harness, nothing to offer
     else:
         # No-tools persona for a caller we don't recognize. NOT_GIVEN (not None) is how pipecat's
         # universal LLMContext expresses "no tools" — passing None raises TypeError. (CONTRACT
@@ -963,26 +666,12 @@ async def ws(websocket: WebSocket) -> None:
     # BUG 1 fix: seed the context so the model's history shows it has ALREADY greeted.
     # The exact GREETING goes in as the assistant's first turn — paired with the system
     # prompt's "never greet again", the model has nothing to restart and just continues.
-    #
-    # TOOL-NARRATION fix: for an AUTHORIZED call we ALSO seed one proper tool-call exchange
-    # right after the greeting (see _seed_tool_example). Nemotron-nano imitates its own history;
-    # without this, a single prose-narration turn poisons the call and the model stops calling
-    # tools entirely. The seed makes 'call a tool' the established pattern and recovers tool use
-    # even after a stray narration. Unauthorized callers have no tools, so they get no seed.
     seeded_messages: list[dict] = [
         {"role": "system", "content": prompt},
         {"role": "assistant", "content": greeting},
     ]
-    if authorized:
-        seeded_messages.extend(_seed_tool_example())
     context = LLMContext(messages=seeded_messages, tools=tools)
 
-    # Voice-controlled Mac harness: for an AUTHORIZED call, wire the FULL registry + the
-    # confirm/cancel/request_new_tool control tools onto the LLM. The adapters dispatch in a
-    # worker thread (so blocking osascript never stalls the loop), record actions to memory,
-    # and gate CONFIRM actions on the per-call broker. Skipped entirely for unauthorized calls.
-    if authorized:
-        build_tools_and_register(llm, context, broker, recorder, task_holder)
     # Patient endpointing: a prosody model (not a silence timer) decides when the caller is
     # done, so the agent waits him out instead of cutting him off or dead-airing.
     turn_strategies = UserTurnStrategies(
@@ -1018,9 +707,6 @@ async def ws(websocket: WebSocket) -> None:
         params=PipelineParams(allow_interruptions=True, audio_in_sample_rate=SR, audio_out_sample_rate=SR),
     )
     goodbye.task = task  # hand the processor the task so it can queue EndFrame on goodbye
-    # Hand the live task to the tool adapters so request_new_tool can queue its "building it
-    # now" filler frame the moment it's called (the adapters closed over this holder above).
-    task_holder.task = task
 
     # BUG 1 fix: speak the opening as a FIXED line exactly once — no LLMRunFrame, so an
     # interruption can never trigger a regeneration that loops the intro. We hold off until
