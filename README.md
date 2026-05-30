@@ -41,41 +41,78 @@ be a machine.
 
 ---
 
-## Our bet: proactive voice, designed to improve itself
+## Our bet
 
-Three things have to be true at once for this to work.
+**Voice, not apps.** Apps and portals select for the literate, the
+connected, and the unburdened. A phone call works on any device, in any
+language, at any literacy level — and it's the medium people already
+reach for when they're scared.
 
-**1. It has to be voice, on a phone.**
-Apps select for the literate, the connected, and the unburdened. SMS
-selects out the people whose distress is hardest to surface in writing. A
-phone call is the lowest-friction surface that exists: it works on any
-device, in any language, for any literacy level, and it's the medium
-people already use to ask for help when they're scared.
+**Proactive, not on-demand.** The 6-week visit isn't happening. timbre
+calls *out*, on a schedule keyed to the patient's birth date and risk
+profile.
 
-**2. It has to be proactive.**
-The 6-week visit isn't happening. Waiting for the patient to initiate is
-the failure mode we're trying to fix. timbre calls them — on a schedule
-matched to their birth date and risk profile — and asks the clinical
-questions a postpartum visit would have asked.
+**Self-improving, not static.** A prompt that handles ten patients well
+will harm the eleventh — because she'll phrase her hemorrhage as *"I'm a
+little dizzy"* or her suicidal ideation as *"I'm just so tired."* A
+clinical voice agent that isn't continuously evaluated is one transcript
+away from harm. That's what the [self-improvement loop](#the-self-improvement-loop-)
+below is for.
 
-**3. It has to improve itself.**
-This is the unlock most voice-agent projects skip. A static prompt that
-handles ten patients well will harm the eleventh, because the eleventh
-will phrase her hemorrhage as "I'm a little dizzy" or her suicidal
-ideation as "I'm just so tired." Every call surfaces a new phrasing, a
-new accent, a new clinical edge case. **A clinical voice agent that
-isn't continuously evaluated and retuned is one transcript away from
-harm.**
+> The agent gets safer and warmer over time. Without anyone guessing what to fix.
 
-timbre is built as a closed feedback loop — see the [self-improvement
-loop](#the-self-improvement-loop-) section below. Cekura, a separate
-eval system, replays simulated patient personas against the agent, runs
-an LLM judge against a six-criterion rubric, and surfaces the specific
-failures the team needs to fix. Those fixes go back into the prompt and
-the Flow graph. The next batch of evals tests whether the fix held.
+---
 
-> **The agent gets safer and warmer over time. Without anyone guessing
-> what to fix.**
+## More than safety: an engagement layer for the clinic
+
+The same call that catches a postpartum hemorrhage also catches *"the
+pharmacy never called me about my prescription"* and *"I waited 40
+minutes on hold to reschedule."* Every conversation surfaces three
+streams at once:
+
+- **Clinical signal** — recovery, mental health, newborn, medication
+  adherence. The reason the call exists.
+- **Service signal** — billing confusion, scheduling friction, lactation
+  resources, transportation barriers, things that broke during discharge.
+- **Voice-of-patient signal** — CSAT, gratitude, complaints, the sentences
+  you only get when someone has the time to actually answer.
+
+Each of these is written to the dashboard as structured data, not buried
+in a transcript:
+
+| Stream | Where it lands | Who acts on it |
+|---|---|---|
+| Clinical | `recovery_answer`, `phq_score`, `newborn_answer`, `adherence`, `escalation` | nurse / doula, in real time |
+| Service | `feedback` (categorized: billing, scheduling, facilities, staff, comms) | ops + concierge, weekly |
+| Voice-of-patient | `csat`, `feedback` (sentiment, themes) | leadership + product, monthly |
+
+**The thesis: providing better service is easier when getting feedback
+is easier.** A clinic that can only measure patient experience through a
+once-a-year survey is running blind. timbre turns every check-in call
+into a structured pulse — clinical *and* operational — so the
+organization can act on the same week's data, not last quarter's.
+
+The dashboard surfaces these streams as three different views: live
+queue + escalations (clinical, real-time), Patient Voices (voice-of-
+patient, weekly), and Cekura evals (agent quality, on-demand).
+
+### What the care team sees
+
+**Today's queue** — every scheduled call for the day, in order. The
+agent works through this list. The active call is the one currently
+talking to a patient.
+
+![Dashboard mockup: today's call queue page. Five postpartum patients listed as cards, each showing name, language chip, status (one in progress, four queued), birth type, day postpartum, provider, doula, and scheduled time.](docs/img/dashboard-queue.svg)
+
+**Escalations** — the moment a red flag fires (incision infection,
+suicidal ideation, IPV danger, cost-blocked medication), the patient
+appears here and an on-call clinician is paged. The agent has already
+captured the evidence; the human picks up the conversation.
+
+![Dashboard mockup: escalations page. One urgent maternal alert (Maria Hernandez, possible incision infection, "incision feels warm and there's yellow fluid"), one warning billing alert (Aisha Williams, cost-blocked metformin), and one resolved pediatric alert from earlier in the day.](docs/img/dashboard-escalations.svg)
+
+> Mockups follow the [`Editorial Warm`](dashboard/DESIGN.md) design
+> system. Source SVGs in `docs/img/dashboard-*.svg`.
 
 ---
 

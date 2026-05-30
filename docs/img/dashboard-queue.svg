@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 780" width="100%" font-family="Inter, system-ui, sans-serif">
+  <defs>
+    <style>
+      .serif { font-family: 'Fraunces', Georgia, serif; }
+      .ink { fill: #1F1B16; }
+      .muted { fill: #6B6258; }
+      .micro { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; }
+    </style>
+  </defs>
+
+  <!-- Page background (cream) -->
+  <rect width="1280" height="780" fill="#F7F1E6"/>
+
+  <!-- Sidebar -->
+  <rect x="0" y="0" width="256" height="780" fill="#F7F1E6" stroke="#E4D9C5" stroke-width="1"/>
+  <text x="24" y="56" class="serif ink" font-size="26" font-weight="500">timbre</text>
+  <text x="113" y="54" class="muted micro">care console</text>
+
+  <!-- Sidebar nav -->
+  <!-- Active item -->
+  <rect x="12" y="100" width="232" height="36" rx="6" fill="#EFE7D7"/>
+  <circle cx="32" cy="118" r="5" fill="#1F1B16"/>
+  <text x="48" y="123" class="ink" font-size="14" font-weight="500">Today's queue</text>
+
+  <text x="48" y="161" class="muted" font-size="14">Live calls</text>
+  <circle cx="32" cy="156" r="5" fill="none" stroke="#6B6258" stroke-width="1.5"/>
+
+  <text x="48" y="199" class="muted" font-size="14">Escalations</text>
+  <polygon points="29,193 35,193 32,200" fill="none" stroke="#6B6258" stroke-width="1.5"/>
+
+  <text x="48" y="237" class="muted" font-size="14">Patient Voices</text>
+  <rect x="28" y="227" width="9" height="9" rx="1.5" fill="none" stroke="#6B6258" stroke-width="1.5"/>
+
+  <text x="48" y="275" class="muted" font-size="14">Patients</text>
+  <rect x="28" y="265" width="9" height="11" rx="1" fill="none" stroke="#6B6258" stroke-width="1.5"/>
+
+  <text x="48" y="313" class="muted" font-size="14">Cekura evals</text>
+  <circle cx="32" cy="308" r="5" fill="none" stroke="#6B6258" stroke-width="1.5"/>
+
+  <text x="24" y="752" class="muted micro">Demo data only — no real PHI.</text>
+
+  <!-- Page header -->
+  <line x1="256" y1="92" x2="1280" y2="92" stroke="#E4D9C5" stroke-width="1"/>
+  <text x="288" y="56" class="serif ink" font-size="28" font-weight="500">Today's call queue</text>
+  <text x="288" y="80" class="muted" font-size="13">Scheduled postpartum check-ins for today. The voice agent works through this list in order.</text>
+
+  <!-- Header badge -->
+  <rect x="1140" y="46" width="116" height="26" rx="13" fill="none" stroke="#E4D9C5" stroke-width="1"/>
+  <text x="1198" y="63" class="ink" font-size="11" font-weight="600" text-anchor="middle" letter-spacing="0.08em">12 CALLS QUEUED</text>
+
+  <!-- Queue cards -->
+  <g transform="translate(288 124)">
+
+    <!-- Card 1: in-progress (Maria, Spanish) -->
+    <rect width="960" height="84" rx="10" fill="#FFFFFF" stroke="#E4D9C5"/>
+    <text x="20" y="32" class="ink" font-size="15" font-weight="600">Maria Hernandez</text>
+    <!-- ES chip -->
+    <rect x="170" y="18" width="30" height="20" rx="10" fill="#EFE7D7"/>
+    <text x="185" y="32" class="ink" font-size="10" font-weight="600" text-anchor="middle" letter-spacing="0.08em">ES</text>
+    <!-- in progress chip -->
+    <rect x="210" y="18" width="100" height="20" rx="10" fill="#E6EDE5"/>
+    <text x="260" y="32" font-size="10" font-weight="600" fill="#3F5A3E" text-anchor="middle" letter-spacing="0.08em">IN PROGRESS</text>
+    <text x="20" y="58" class="muted" font-size="12">c-section · day 8 postpartum · Dr. Patel · doula: Renata Vega</text>
+    <text x="940" y="32" class="ink" font-size="12" font-weight="500" text-anchor="end">just now</text>
+    <text x="940" y="58" class="muted" font-size="12" text-anchor="end">at <tspan font-family="JetBrains Mono, monospace" fill="#1F1B16">mother_recovery</tspan></text>
+
+    <!-- Card 2: Sarah (English, queued in 12m) -->
+    <g transform="translate(0 100)">
+      <rect width="960" height="84" rx="10" fill="#FFFFFF" stroke="#E4D9C5"/>
+      <text x="20" y="32" class="ink" font-size="15" font-weight="600">Sarah Chen</text>
+      <rect x="156" y="18" width="30" height="20" rx="10" fill="#EFE7D7"/>
+      <text x="171" y="32" class="ink" font-size="10" font-weight="600" text-anchor="middle" letter-spacing="0.08em">EN</text>
+      <rect x="196" y="18" width="64" height="20" rx="10" fill="none" stroke="#E4D9C5"/>
+      <text x="228" y="32" class="ink" font-size="10" font-weight="600" text-anchor="middle" letter-spacing="0.08em">QUEUED</text>
+      <text x="20" y="58" class="muted" font-size="12">vaginal · day 14 postpartum · Dr. Okafor</text>
+      <text x="940" y="32" class="ink" font-size="12" font-weight="500" text-anchor="end">in 12m</text>
+    </g>
+
+    <!-- Card 3: Aisha -->
+    <g transform="translate(0 200)">
+      <rect width="960" height="84" rx="10" fill="#FFFFFF" stroke="#E4D9C5"/>
+      <text x="20" y="32" class="ink" font-size="15" font-weight="600">Aisha Williams</text>
+      <rect x="168" y="18" width="30" height="20" rx="10" fill="#EFE7D7"/>
+      <text x="183" y="32" class="ink" font-size="10" font-weight="600" text-anchor="middle" letter-spacing="0.08em">EN</text>
+      <rect x="208" y="18" width="64" height="20" rx="10" fill="none" stroke="#E4D9C5"/>
+      <text x="240" y="32" class="ink" font-size="10" font-weight="600" text-anchor="middle" letter-spacing="0.08em">QUEUED</text>
+      <text x="20" y="58" class="muted" font-size="12">c-section · day 5 postpartum · Dr. Patel · doula: Renata Vega</text>
+      <text x="940" y="32" class="ink" font-size="12" font-weight="500" text-anchor="end">in 38m</text>
+    </g>
+
+    <!-- Card 4: Priya -->
+    <g transform="translate(0 300)">
+      <rect width="960" height="84" rx="10" fill="#FFFFFF" stroke="#E4D9C5"/>
+      <text x="20" y="32" class="ink" font-size="15" font-weight="600">Priya Patel</text>
+      <rect x="124" y="18" width="30" height="20" rx="10" fill="#EFE7D7"/>
+      <text x="139" y="32" class="ink" font-size="10" font-weight="600" text-anchor="middle" letter-spacing="0.08em">EN</text>
+      <rect x="164" y="18" width="64" height="20" rx="10" fill="none" stroke="#E4D9C5"/>
+      <text x="196" y="32" class="ink" font-size="10" font-weight="600" text-anchor="middle" letter-spacing="0.08em">QUEUED</text>
+      <text x="20" y="58" class="muted" font-size="12">vaginal · day 21 postpartum · Dr. Okafor</text>
+      <text x="940" y="32" class="ink" font-size="12" font-weight="500" text-anchor="end">in 1h 4m</text>
+    </g>
+
+    <!-- Card 5: Lucia, Spanish -->
+    <g transform="translate(0 400)">
+      <rect width="960" height="84" rx="10" fill="#FFFFFF" stroke="#E4D9C5"/>
+      <text x="20" y="32" class="ink" font-size="15" font-weight="600">Lucía Rivera</text>
+      <rect x="130" y="18" width="30" height="20" rx="10" fill="#EFE7D7"/>
+      <text x="145" y="32" class="ink" font-size="10" font-weight="600" text-anchor="middle" letter-spacing="0.08em">ES</text>
+      <rect x="170" y="18" width="64" height="20" rx="10" fill="none" stroke="#E4D9C5"/>
+      <text x="202" y="32" class="ink" font-size="10" font-weight="600" text-anchor="middle" letter-spacing="0.08em">QUEUED</text>
+      <text x="20" y="58" class="muted" font-size="12">c-section · day 35 postpartum · Dr. Patel · doula: Renata Vega</text>
+      <text x="940" y="32" class="ink" font-size="12" font-weight="500" text-anchor="end">in 2h 11m</text>
+    </g>
+
+  </g>
+</svg>
