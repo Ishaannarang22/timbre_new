@@ -16,6 +16,7 @@ Launched behind a cloudflared tunnel by run_morning_call.py (Twilio needs a publ
 """
 
 import asyncio
+import html
 import json
 import os
 import re
@@ -64,33 +65,48 @@ load_dotenv()
 
 from call_me import generate_quote  # noqa: E402  (resilient Nemotron quote + fallback)
 from turn_helpers import PatientSmartTurnV3  # noqa: E402  (shared patient endpointer)
+from prompts import load_prompt  # noqa: E402  (system prompt lives in prompts/prompts.json)
 
 # agent_memory gives the agent cross-call memory (CallRecorder + recall). It lives under
 # src/ (cwd=src in the daemon), same as call_me/turn_helpers. The voice-controlled Mac
 # harness that used to live here (a large tool registry + a GLM tool factory) has been
 # removed; this is now a tools-less voice agent.
 import agent_memory  # noqa: E402  (CallRecorder + recall - cross-call memory)
+import cekura_observability  # noqa: E402  (best-effort post-call metrics export)
 
 # --- The voice. THIS is "our voice" — Cartesia Sonic, same id as the local bot. --------
 CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID") or "e07c00bc-4134-4eae-9ea4-1a55fb45746b"  # Brooke
 CARTESIA_SPEED = float(os.getenv("CARTESIA_SPEED", "0.95"))
 LLM_MODEL = os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
-TARGET_NAME = os.getenv("TARGET_NAME", "Ishaan")
 # Hard cap so an unattended morning call can't run forever ("a couple of minutes").
 # This is now a BACKSTOP only — the call normally ends itself when the agent says goodbye.
 MAX_CALL_SECS = float(os.getenv("MAX_CALL_SECS", "150"))
 # Telephony audio is 8 kHz μ-law; run the whole pipeline at 8k so nothing has to guess.
 SR = 8000
 
-# The opening line, spoken VERBATIM and exactly ONCE. See BUG 1 fix below: we no longer
-# let the LLM *generate* the open (an LLMRunFrame re-runs on every interruption and loops
-# the intro). A fixed TTSSpeakFrame can't be regenerated, so the call can only move forward.
-GREETING = f"Hi {TARGET_NAME}! How are you doing this morning?"
+# The opening line is spoken VERBATIM and exactly ONCE. See BUG 1 fix below: we no longer let
+# the LLM *generate* the open (an LLMRunFrame re-runs on every interruption and loops the intro).
+# A fixed TTSSpeakFrame can't be regenerated, so the call can only move forward.
+#
+# General-purpose agent: nothing is hardcoded to one person. The caller's name comes from a
+# database keyed by their phone number (see caller_display_name); when we can't identify them
+# we greet without a name.
+def caller_display_name(phone: str) -> str | None:
+    """Look up the caller's name in the contacts database by phone number, or None if unknown.
 
-# INBOUND open: when Ishaan DIALS the agent (vs the 7 AM outbound call), it's a phone
-# ASSISTANT, not a morning wake-up. Spoken verbatim exactly once, same mechanism as the
-# outbound GREETING (a fixed TTSSpeakFrame seeded into context as the assistant's first turn).
-INBOUND_GREETING = f"Hey {TARGET_NAME}! What can I do for you?"
+    TODO(db): wire this to the real datastore. For now it returns None so the agent stays
+    general-purpose and greets name-free. Must never raise — a failed lookup just means 'unknown'."""
+    return None
+
+
+def greeting_for(name: str | None, mode: str) -> str:
+    """The fixed spoken opener, built per call. `name` is the caller's looked-up name (None when
+    unknown, in which case the greeting is name-free). Same mechanism for both directions: a fixed
+    TTSSpeakFrame seeded into context as the assistant's first turn."""
+    who = f" {name}" if name else " there"
+    if mode == "inbound":
+        return f"Hi{who}! Thanks for calling. How are you doing today?"
+    return f"Hi{who}! Thanks for taking a moment to chat. How are you doing today?"
 
 
 # --- CALLER AUTHORIZATION (owner-only Mac control) ----------------------------
@@ -159,6 +175,14 @@ GOODBYE_TAIL_RE = re.compile(r"(good ?bye|bye)\s*[.!]*\s*$", re.IGNORECASE)
 MIN_ASSISTANT_TURNS_BEFORE_GOODBYE = int(os.getenv("MIN_GOODBYE_TURNS", "2"))
 
 app = FastAPI()
+BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _run_in_background(func, *args, **kwargs) -> None:
+    """Run teardown/callback work without extending the live call lifecycle."""
+    task = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
+    BACKGROUND_TASKS.add(task)
+    task.add_done_callback(BACKGROUND_TASKS.discard)
 
 # P1-4: Quote pre-generated at /twiml time (while Twilio sets up the call), keyed by
 # CallSid, so the greeting is instant and the exact quote is guaranteed into the prompt.
@@ -247,64 +271,42 @@ def build_turn_analyzer() -> "PatientSmartTurnV3":
     return a
 
 
-def system_prompt(quote: str) -> str:
-    # BUG 1 fix: this prompt must NOT instruct the model to greet or open the call.
-    # The opening line is spoken deterministically once (GREETING) and inserted into the
-    # context as the assistant's first turn, so the model's view of history is that it has
-    # ALREADY greeted. Telling it to greet here is exactly what made every regeneration
-    # (each barge-in while the caller talked over the open) restart the intro.
+def call_system_prompt() -> str:
+    """The phone agent's persona is loaded LIVE from prompts/prompts.json (key
+    'm0_local_mic_voice_agent'), so the prompt can be edited there without touching bot code and
+    the change takes effect on the NEXT call (no daemon restart needed). We append only the
+    minimal phone-call mechanics the deterministic greeting + goodbye-hangup depend on: keep
+    turns short, don't re-greet (the opener is spoken and seeded separately), and say a clear
+    goodbye to end the call. A broken or missing prompts.json falls back to a safe persona
+    rather than dropping a live call."""
+    try:
+        persona = load_prompt("m0_local_mic_voice_agent").strip()
+    except SystemExit as e:
+        logger.warning(f"prompts.json load failed ({e}); using fallback persona")
+        persona = "You are a warm, empathetic voice assistant. Keep replies brief and natural."
     return (
-        f"You are a warm, upbeat companion on a short good-morning phone call with {TARGET_NAME}. "
-        "Everything you say is spoken aloud over a phone, so keep every turn to 1-3 short, natural "
-        "sentences. No markdown, no lists, no emoji, no stage directions.\n\n"
-        f"The call is ALREADY in progress. You have already greeted {TARGET_NAME} and asked how he "
-        "is doing, and he has just replied. Respond ONLY to his most recent message. Do NOT greet "
-        "him, do NOT say hi, hello, hey, or good morning, do NOT restate who you are or why you are "
-        "calling, and do NOT repeat anything you have already said. Your reply MUST begin by "
-        "reacting directly to what he just told you.\n\n"
-        "React warmly and briefly to what he says. Then tell him you've been tasked with giving "
-        "him a motivational quote of the day, and deliver EXACTLY this quote, word for word:\n\n"
-        f"{quote}\n\n"
-        "After the quote, chat naturally for a moment — invite his reaction, relate it to his day. "
-        "Keep it light and genuine. After a couple of short exchanges, warmly wrap up and say a "
-        f"clear goodbye to {TARGET_NAME}."
+        persona + "\n\n"
+        "You are on a live phone call and everything you say is spoken aloud, so keep every turn "
+        "to 1-3 short, natural sentences with no markdown, lists, emoji, or stage directions. The "
+        "call is ALREADY in progress and you have already greeted the caller, so do NOT greet "
+        "again or repeat yourself; reply only to what they just said. When the conversation is "
+        "finished, warmly say a clear goodbye to end the call."
     )
+
+
+# The three call personas now all serve the SAME prompts.json persona (the project's pivot to a
+# single voice agent). They remain as named entry points so the run path keeps working; the
+# `quote` arg is accepted for signature compatibility but is no longer used.
+def system_prompt(quote: str) -> str:
+    return call_system_prompt()
 
 
 def no_tools_system_prompt() -> str:
-    """NO-TOOLS persona for an UNAUTHORIZED inbound caller (a number we don't recognize). The
-    agent can chat briefly and warmly, but has NO tools, cannot control this Mac, and offers no
-    morning-quote framing. The opening line (INBOUND_GREETING) was already spoken + seeded, so —
-    as with the other personas — the model must NOT greet again."""
-    return (
-        f"You are {TARGET_NAME}'s friendly phone assistant, but you do NOT recognize this "
-        "caller. Everything you say is spoken aloud over a phone, so keep every turn to 1-3 "
-        "short, natural sentences. No markdown, no lists, no emoji, no stage directions.\n\n"
-        "The call is ALREADY in progress. You have already greeted the caller and asked what "
-        "they need. Respond ONLY to their most recent message. Do NOT greet them again, do NOT "
-        "say hi, hello, or hey again, and do NOT repeat anything you have already said.\n\n"
-        "You can chat briefly and politely, but you CANNOT control this Mac, run any actions, or "
-        "look anything up for callers you don't recognize — you have no tools available. If they "
-        "ask you to do something on the computer, kindly explain you're not able to do that for "
-        "this caller. When they're done, warmly say goodbye."
-    )
+    return call_system_prompt()
 
 
 def inbound_system_prompt() -> str:
-    # INBOUND persona: Ishaan dialed in. A warm, concise phone assistant that chats
-    # briefly. NO motivational quote, NO morning framing. The opening line
-    # (INBOUND_GREETING) is spoken deterministically once and seeded as the assistant's
-    # first turn, so the model must NOT greet again.
-    return (
-        f"You are {TARGET_NAME}'s warm, concise personal phone assistant. He just CALLED you. "
-        "Everything you say is spoken aloud over a phone, so keep every turn to 1-3 short, natural "
-        "sentences. No markdown, no lists, no emoji, no stage directions.\n\n"
-        f"The call is ALREADY in progress. You have already greeted {TARGET_NAME} and asked what "
-        "he needs. Respond ONLY to his most recent message. Do NOT greet him again, do NOT say hi, "
-        "hello, or hey again, and do NOT repeat anything you have already said. Help him quickly "
-        "and naturally, then briefly chat if he wants. When he's done and says goodbye, warmly say "
-        "a clear goodbye back."
-    )
+    return call_system_prompt()
 
 
 def _strip_quote(text: str, quote: str) -> str:
@@ -493,9 +495,17 @@ async def twiml(request: Request) -> PlainTextResponse:
     )
     # `caller` is the NORMALIZED From (digits + optional leading '+'), so it's XML-safe; we pass
     # it (not the raw From) both for memory keying and to avoid any XML-injection surface.
+    recording = ""
+    if cekura_observability.record_calls():
+        callback = html.escape(f"https://{host}/recording-status", quote=True)
+        recording = (
+            "<Start><Recording channels=\"dual\" track=\"both\" "
+            f"recordingStatusCallback=\"{callback}\" "
+            "recordingStatusCallbackEvent=\"completed\"/></Start>"
+        )
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        f"<Response><Connect><Stream url=\"{ws_url}\">"
+        f"<Response>{recording}<Connect><Stream url=\"{ws_url}\">"
         f"<Parameter name=\"token\" value=\"{token}\"/>"
         f"<Parameter name=\"mode\" value=\"{mode}\"/>"
         f"<Parameter name=\"authorized\" value=\"{'true' if authorized else 'false'}\"/>"
@@ -503,6 +513,23 @@ async def twiml(request: Request) -> PlainTextResponse:
         "</Stream></Connect></Response>"
     )
     return PlainTextResponse(xml, media_type="application/xml")
+
+
+@app.api_route("/recording-status", methods=["GET", "POST"])
+async def recording_status(request: Request) -> PlainTextResponse:
+    """Receive Twilio's completed-recording callback and hand audio to Cekura."""
+    try:
+        form = await request.form()
+        status = form.get("RecordingStatus") or request.query_params.get("RecordingStatus") or ""
+        call_sid = form.get("CallSid") or request.query_params.get("CallSid") or ""
+        recording_url = form.get("RecordingUrl") or request.query_params.get("RecordingUrl") or ""
+    except Exception:  # noqa: BLE001 - Twilio callbacks should always receive a 200
+        status = request.query_params.get("RecordingStatus", "")
+        call_sid = request.query_params.get("CallSid", "")
+        recording_url = request.query_params.get("RecordingUrl", "")
+    if status == "completed" and call_sid and recording_url:
+        _run_in_background(cekura_observability.recording_completed, call_sid, recording_url)
+    return PlainTextResponse("ok")
 
 
 @app.websocket("/ws")
@@ -585,7 +612,7 @@ async def ws(websocket: WebSocket) -> None:
     else:
         QUOTES.pop(call_sid, None)  # discard the unused empty placeholder
         quote = ""
-    greeting = INBOUND_GREETING if mode == "inbound" else GREETING
+    greeting = greeting_for(caller_display_name(caller), mode)
     logger.info(
         f"/ws connected stream_sid={stream_sid} call_sid={call_sid} "
         f"mode={mode} authorized={authorized}"
@@ -739,19 +766,29 @@ async def ws(websocket: WebSocket) -> None:
         await runner.run(task)
     finally:
         guard.cancel()
+        try:
+            messages = context.get_messages() or context.messages
+        except Exception:  # noqa: BLE001
+            messages = None
         # MEMORY: persist + summarize this call (authorized calls only — unauthorized ones have
         # no recorder). Best-effort and time-bounded: summarization runs in a worker thread so
         # it doesn't block the loop, and we cap the wait so teardown isn't delayed more than a
         # few seconds. Any failure is swallowed — memory must never break call teardown.
         if recorder is not None:
             try:
-                messages = context.get_messages() or context.messages
-            except Exception:  # noqa: BLE001
-                messages = None
-            try:
                 await asyncio.wait_for(
                     asyncio.to_thread(recorder.finalize, messages), timeout=5.0
                 )
             except Exception:  # noqa: BLE001 — incl. TimeoutError: don't delay teardown
                 logger.warning("memory finalize skipped (error or timeout)")
+        # Metrics export is separate from memory: include all calls, but scrub text and do
+        # network I/O in the background so observability can never delay teardown.
+        _run_in_background(
+            cekura_observability.export_transcript,
+            call_sid,
+            messages,
+            caller=caller,
+            mode=mode,
+            authorized=authorized,
+        )
         logger.info(f"/ws call {call_sid} finished")
