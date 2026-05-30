@@ -1,0 +1,10 @@
+[project]
+name = "timbre"
+version = "0.1.0"
+description = "timbre — wellness voice agent (Pipecat Cloud, Twilio media streams)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pipecat-ai[websocket,deepgram,openai,cartesia,silero,runner]>=1.3.0",
+    "pipecatcloud>=0.7.1",
+]

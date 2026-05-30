@@ -26,3 +26,7 @@ docs/playbooks/
 
 # Claude Code local state + linked worktrees — never commit
 .claude/
+
+# Deploy secrets (uploaded to Pipecat Cloud, never committed)
+deploy/secrets.env
+deploy/.venv/

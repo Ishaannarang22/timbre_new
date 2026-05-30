@@ -1,0 +1,7 @@
+agent_name = "timbre"
+secret_set = "timbre-secrets"
+
+[scaling]
+	# 0 = no warm agent kept idle (cheaper for a test; ~few-sec cold start on first call).
+	# Bump to 1 for instant pickup once this is the real wellness agent.
+	min_agents = 0
