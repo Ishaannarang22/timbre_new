@@ -1,92 +1,205 @@
 # timbre
 
-Voice agents that run over a Twilio phone call. Two bots share the pipeline:
+**A self-improving voice agent that calls postpartum patients at home — and gets safer every time it does.**
 
-- **`twilio_bot.py`** — the original morning-quote companion (Ishaan's 7 AM call).
-- **`postpartum_bot.py`** — a postpartum maternal check-in agent driven by [Pipecat Flows](https://github.com/pipecat-ai/pipecat-flows). Walks a structured clinical conversation and POSTs answers to the timbre_dashboard `/api/v1/*` routes in real time.
-
-Both bots share the same audio stack: Twilio Media Streams ↔ Deepgram STT ↔ NVIDIA Nemotron LLM ↔ Cartesia TTS, with `PatientSmartTurnV3` prosody endpointing.
-
-See `CLAUDE.md` for the project's broader direction and `docs/` for architecture / roadmap / setup.
+> Every year in the US, ~700 mothers die from pregnancy-related causes.
+> Roughly **80% of those deaths are preventable**. Most of them happen in the
+> **42 days after discharge** — the same 42 days during which no one is
+> watching.
+>
+> timbre watches. By phone. In the patient's language. Every day.
 
 ---
 
-## Postpartum flow diagram
+## The 42 days nobody is watching
 
-```
-                         ┌──────────────────────────┐
-   /twiml mints token, ──▶│       identity_verify     │
-   pulls patient_id        └──────────────┬───────────┘
-   from queue                              │ verified
-                                           │
-                       proxy detected ◀────┤
-                              │            │
-                              ▼            │
-                ┌─────────────────────┐    │
-                │ proxy_reject_       │    │
-                │  reschedule          │    │
-                └──────────┬───────────┘    │
-                           ▼                 ▼
-                          END    ┌──────────────────────────┐
-                                  │      mother_recovery     │──► escalate_to_nurse (red flag)
-                                  └──────────────┬───────────┘         │
-                                                 │                       ▼
-                                                 ▼              ┌─────────────────────┐
-                                  ┌──────────────────────────┐  │ escalation_handoff  │──► END
-                                  │   mental_health_phq2     │  └─────────────────────┘
-                                  └──────────────┬───────────┘
-                                                 │ score >= 3?
-                                                 │
-                                  ┌──────yes─────┴──────no──────┐
-                                  ▼                             │
-                       ┌──────────────────────┐                 │
-                       │     phq9_full         │── Q9>0 ───────► escalate_crisis
-                       └──────────┬───────────┘                 │
-                                  │                             │
-                                  ▼                             ▼
-                                  └──────► ┌──────────────────────────┐
-                                            │     newborn_health       │──► escalate_pediatric
-                                            └──────────────┬───────────┘    (red flag)
-                                                           │
-                                              feeding issue │
-                                              (no red flag) │
-                                                           ▼
-                                            ┌──────────────────────────┐
-                                            │   lactation_support       │
-                                            └──────────────┬───────────┘
-                                                           │
-                                                           ▼
-                                            ┌──────────────────────────┐
-                                            │   medication_adherence   │
-                                            │  (one entry per Rx)       │
-                                            └──────────────┬───────────┘
-                                                           │
-                                              barrier ∈ { cost,
-                                              transport,
-                                              no_pharmacy }
-                                                           │
-                                                           ▼
-                                            ┌──────────────────────────┐
-                                            │   pharmacy_routing        │
-                                            └──────────────┬───────────┘
-                                                           │
-                                                           ▼
-                                            ┌──────────────────────────┐
-                                            │      social_screen        │──► escalate_crisis
-                                            └──────────────┬───────────┘   (IPV active danger)
-                                                           │
-                                                           ▼
-                                            ┌──────────────────────────┐
-                                            │      doula_handoff        │
-                                            └──────────────┬───────────┘
-                                                           │
-                                                           ▼
-                                            ┌──────────────────────────┐
-                                            │     csat_collection       │
-                                            └──────────────┬───────────┘
-                                                           ▼
-                                                          END
-```
+The first six weeks after birth are the highest-risk window in maternal care.
+Hemorrhage, infection, severe depression, preeclampsia, suicidal ideation —
+the things that kill mothers — surface here. The standard intervention is a
+single 6-week clinic visit.
+
+That model is failing the people who need it most:
+
+- **~40% of US patients miss the 6-week postpartum visit.** Rates are worse
+  for Medicaid, Spanish-speaking, rural, and Black patients.
+- **~80% of US maternal deaths are preventable.** Most are flagged by
+  symptoms that go unreported — because no one is asking, and the patient
+  is too overwhelmed to dial.
+- **A clinic visit is a logistics problem long before it is a clinical
+  one** — childcare, transport, time off work, language, transportation,
+  rural distance, insurance. The barriers are *not* clinical and they don't
+  get solved by adding more clinic capacity.
+
+The system that produced this gap can't fix it. You can't staff your way
+out of "no one called." Asking exhausted new mothers to log into a portal
+or fill out a questionnaire selects against the patients most at risk.
+
+The intervention has to come *to* the patient. It has to be a phone call.
+It has to feel human. And — because there aren't enough clinicians on
+earth to do this for every postpartum patient in the country — it has to
+be a machine.
+
+---
+
+## Our bet: proactive voice, designed to improve itself
+
+Three things have to be true at once for this to work.
+
+**1. It has to be voice, on a phone.**
+Apps select for the literate, the connected, and the unburdened. SMS
+selects out the people whose distress is hardest to surface in writing. A
+phone call is the lowest-friction surface that exists: it works on any
+device, in any language, for any literacy level, and it's the medium
+people already use to ask for help when they're scared.
+
+**2. It has to be proactive.**
+The 6-week visit isn't happening. Waiting for the patient to initiate is
+the failure mode we're trying to fix. timbre calls them — on a schedule
+matched to their birth date and risk profile — and asks the clinical
+questions a postpartum visit would have asked.
+
+**3. It has to improve itself.**
+This is the unlock most voice-agent projects skip. A static prompt that
+handles ten patients well will harm the eleventh, because the eleventh
+will phrase her hemorrhage as "I'm a little dizzy" or her suicidal
+ideation as "I'm just so tired." Every call surfaces a new phrasing, a
+new accent, a new clinical edge case. **A clinical voice agent that
+isn't continuously evaluated and retuned is one transcript away from
+harm.**
+
+timbre is built as a closed feedback loop — see the [self-improvement
+loop](#the-self-improvement-loop-) section below. Cekura, a separate
+eval system, replays simulated patient personas against the agent, runs
+an LLM judge against a six-criterion rubric, and surfaces the specific
+failures the team needs to fix. Those fixes go back into the prompt and
+the Flow graph. The next batch of evals tests whether the fix held.
+
+> **The agent gets safer and warmer over time. Without anyone guessing
+> what to fix.**
+
+---
+
+## System architecture
+
+Three systems, three responsibilities. The dashboard is the only thing
+holding state — the agent owns no memory between calls.
+
+![timbre system architecture: patient calls Twilio, which streams audio to the timbre voice agent, which writes to the dashboard, which surfaces escalations to the care team. Cekura simulates patients offline and posts eval results to the dashboard.](docs/img/architecture.svg)
+
+| System | Responsibility | Lives in |
+|---|---|---|
+| **Voice agent** | Runs the conversation. Writes everything it learns to the dashboard. | `src/` (this repo) |
+| **Dashboard** | Stores writes. Streams them to the care team in real time. Surfaces escalations. | `dashboard/` |
+| **Cekura** | Simulates personas calling the agent offline. Scores transcripts. Drives improvement. | external, talks via MCP |
+
+> Diagram source: [`docs/img/architecture.mmd`](docs/img/architecture.mmd)
+
+---
+
+## The voice pipeline — engineering heart
+
+Every spoken turn is a five-stage relay. The whole loop has to finish in
+**under ~1.5 seconds** or the patient feels she is talking to a machine
+— and the trust that lets her say "I'm bleeding through pads in an hour"
+disappears.
+
+![Voice pipeline sequence diagram: patient audio flows through Twilio to Deepgram STT, then to a prosody endpointer, the NVIDIA Nemotron LLM (which writes to the dashboard and emits text), Cartesia Sonic TTS, and back through Twilio to the patient.](docs/img/voice-pipeline.svg)
+
+### Why each layer
+
+Each layer is swappable. The rationale below is what *not* to swap
+absent-mindedly.
+
+| Layer | Choice | Why this, not something else |
+|---|---|---|
+| **Telephony** | Twilio Media Streams | Carrier-grade reach + raw bidirectional audio over WebSocket. The patient is going to use the phone she already has, on the network she already has. |
+| **STT** | Deepgram Nova-3 | Sub-300ms partial transcripts, strong on EN/ES, handles the slurred cadence of a parent who has slept four hours in three days. NVIDIA's speech NIMs are partner-gated for our key. |
+| **Turn-taking** | `PatientSmartTurnV3` (prosody) | Silence-based endpointing cuts patients off mid-thought. Prosody-aware endpointing waits for the *intonation* of a finished sentence. Disproportionately important when the patient is crying, hesitant, or speaking a non-native language. |
+| **LLM** | NVIDIA **Nemotron** (hosted NIM) | Open-weight reasoning model, tunable, free hosted endpoint while we iterate. Clean path to self-host on AWS for HIPAA without rewriting the prompt stack. |
+| **State graph** | **Pipecat Flows** | Deterministic node-to-node transitions over a typed graph. The clinical conversation must visit specific nodes (PHQ-2, recovery, escalation) in a defined order. A free-form prompt cannot guarantee that. |
+| **TTS** | Cartesia Sonic | Sub-200ms first-byte audio, warm prosody, no robotic tail. The voice is the product's bedside manner. |
+| **Orchestrator** | Pipecat (Python) | Pulls the layers into one streaming pipeline. Handles backpressure, barge-in, and barge-out. Runs on Pipecat Cloud. |
+
+### The latency vs. reasoning tension
+
+The single hardest engineering problem in this build:
+
+> Better reasoning ⇄ more thinking tokens ⇄ slower replies ⇄ less
+> human-feeling conversation ⇄ patient hangs up ⇄ symptom not surfaced ⇄
+> harm.
+
+We manage it three ways:
+
+1. **Tiered models.** A small, fast model handles confirmations and
+   reflective acknowledgements. Full Nemotron only runs for clinical
+   reasoning steps.
+2. **Filler phrases.** The agent speaks a natural acknowledgement
+   ("*got it…*") while the LLM is still composing the substantive reply.
+3. **Streaming everywhere.** STT streams partials, LLM streams tokens,
+   TTS streams audio bytes. Nothing waits for a stage to finish.
+
+Future: TensorRT-LLM on a self-hosted Nemotron NIM for another ~2×
+speedup. Magpie-TTS to bring TTS in-house.
+
+> Diagram source: [`docs/img/voice-pipeline.mmd`](docs/img/voice-pipeline.mmd)
+
+---
+
+## The self-improvement loop 🔁
+
+This is the part that makes a clinical voice agent feasible in the first
+place.
+
+![Self-improvement loop: live calls and Cekura persona simulations both feed the agent. The agent writes transcripts and structured data to the dashboard. An LLM judge scores them against a six-criterion rubric. Failure clusters surface to the team. Prompt and Flow updates go back to the agent, closing the loop.](docs/img/improvement-loop.svg)
+
+Two streams feed the agent: **real calls** and **Cekura personas**. Both
+produce transcripts and structured writes that land in the dashboard. An
+LLM judge scores every transcript against a fixed six-criterion rubric:
+
+| Criterion | What it catches |
+|---|---|
+| `node_transition_accuracy` | The agent skipped PHQ-2 or asked questions in the wrong order. |
+| `context_strategy` | The agent forgot something the patient said three turns ago. |
+| `tool_call_latency_ms` | A dashboard write took too long; the patient heard dead air. |
+| `global_function_reliability` | A red-flag phrase didn't trigger `escalate_to_nurse`. |
+| `pii_redaction` | A phone number, email, or SSN leaked into the stored transcript. |
+| `escalation_correctness` | The agent over-escalated, under-escalated, or routed to the wrong category. |
+
+Failures cluster. The team writes scoped fixes to the prompt or the Flow
+graph. The next persona run validates the fix and checks for regressions.
+
+**The Cekura personas test the four scenarios that break naive agents:**
+
+- **The Contradiction** — gives 5-star CSAT but mentions her incision is
+  leaking fluid. Tests whether `escalate_to_nurse` fires despite the
+  positive surface signal.
+- **The Cost-Blocker** — agitated about a $400 medication, demands
+  alternatives. Tests `medication_adherence` + concierge routing.
+- **The Proxy Responder** — spouse answers, tries to complete the call.
+  Tests `identity_verify` rejection without making the spouse feel
+  dismissed.
+- **The Ambiguous Healer** — every answer is "I guess" / "maybe". Tests
+  Smart Turn endpointing + context stability under low-information
+  responses.
+
+This is what "self-improving" actually means in practice: a closed loop
+between live calls, an offline simulator, and a rubric — driving
+specific, evidence-based changes to the agent's prompts and state graph.
+Not a vibe. Not a quarterly review.
+
+> Diagram source: [`docs/img/improvement-loop.mmd`](docs/img/improvement-loop.mmd)
+
+---
+
+## The clinical conversation
+
+The agent walks a typed state graph of clinical nodes. Each node has a
+prompt, a set of allowed tools, and explicit transition rules. Three
+global "escape hatches" — `escalate_to_nurse`, `escalate_pediatric`,
+`escalate_crisis` — fire from any node the moment a red flag is detected
+and route the call to a human within seconds.
+
+![Clinical flow state graph: identity_verify branches to proxy reject or mother_recovery, then PHQ-2 (score >=3 escalates to PHQ-9, Q9>0 triggers crisis escalation), newborn_health (red flag triggers pediatric escalation), lactation_support, medication_adherence, pharmacy_routing, social_screen (IPV triggers crisis), doula_handoff, csat_collection. All escalations route through escalation_handoff to END.](docs/img/clinical-flow.svg)
 
 ### Global functions (available at every node)
 
@@ -102,7 +215,7 @@ These are registered once on the `FlowManager` and can fire from any node.
 | `lookup_prescription_status` | GET `/patients/:id/prescriptions` | No |
 | `capture_feedback` | POST `/patients/:id/feedback` | No |
 
-### What each node POSTs to the dashboard
+### What each node writes to the dashboard
 
 | Node | Endpoint(s) hit | Dashboard table |
 |---|---|---|
@@ -122,7 +235,23 @@ These are registered once on the `FlowManager` and can fire from any node.
 | every transition | PATCH `/calls/:id` `current_node=…` | `call` |
 | call close | PATCH `/calls/:id` `status=completed`, `transcript_redacted`, `ended_at` | `call` |
 
-All transcript text written to `transcript_redacted` goes through `dashboard_client.redact()` first (phones, emails, SSNs masked).
+All transcript text written to `transcript_redacted` goes through
+`dashboard_client.redact()` first (phones, emails, SSNs masked).
+
+> Diagram source: [`docs/img/clinical-flow.mmd`](docs/img/clinical-flow.mmd)
+
+---
+
+## How a call ends up on the dashboard
+
+Writes are **best-effort, fire-and-forget**. If the dashboard is down,
+the call continues — the agent's job is to talk to the patient, not to
+wait for a database. Failed writes are logged and reconciled from the
+transcript later.
+
+![Write path: during a call, each Flow node PATCHes /calls/:id on transition, POSTs to /patients/:id/phq (etc.) on answer, and POSTs to /escalations on a red flag. All three write to Supabase Postgres, which streams to the care team UI over a Realtime channel. Urgent escalations also page the on-call nurse.](docs/img/write-path.svg)
+
+> Diagram source: [`docs/img/write-path.mmd`](docs/img/write-path.mmd)
 
 ---
 
@@ -130,20 +259,25 @@ All transcript text written to `transcript_redacted` goes through `dashboard_cli
 
 ```
 src/
-├── twilio_bot.py         # morning-quote bot (do not modify)
-├── postpartum_bot.py     # postpartum flow bot — FastAPI app on /twiml + /ws
+├── postpartum_bot.py     # the main bot — FastAPI app on /twiml + /ws
+├── twilio_bot.py         # legacy morning-quote bot (kept for reference)
 ├── flows/
-│   ├── __init__.py
 │   └── postpartum.py     # NodeConfig graph + global functions
-├── dashboard_client.py   # async httpx client over /api/v1/* (no-op stub if env unset)
-├── prompts.py            # tiny JSON loader
-├── turn_helpers.py       # PatientSmartTurnV3 prosody endpointer
-├── m0_local_bot.py       # local-mic dev variant
-├── run_morning_call.py   # 7 AM outbound dialer (for twilio_bot)
-└── call_me.py            # generate_quote() helper
+├── dashboard_client.py   # async httpx client over /api/v1/*
+├── turn_helpers.py       # PatientSmartTurnV3 prosody endpointing
+├── prompts.py            # JSON loader for per-node prompts (EN + ES)
+└── m0_local_bot.py       # local-mic dev variant (no Twilio)
 
 prompts/prompts.json      # one entry per node, EN + ES, + per-global instructions
-scripts/sim_twilio_ws.py  # offline Twilio Media Streams simulator; --bot {twilio,postpartum}
+scripts/
+├── sim_twilio_ws.py      # offline Twilio Media Streams simulator
+├── bench_llm_latency.py  # end-to-end turn latency
+└── serve_persistent.py   # local dev server + tunnel
+
+dashboard/                # the Next.js console + Supabase backend
+docs/img/                 # rendered SVG diagrams + Mermaid source
+deploy/                   # Pipecat Cloud deploy manifest
+docs/                     # architecture, roadmap, HIPAA notes
 ```
 
 ---
@@ -151,29 +285,64 @@ scripts/sim_twilio_ws.py  # offline Twilio Media Streams simulator; --bot {twili
 ## Quickstart
 
 ```bash
-# Install deps (Python 3.11+; macOS needs portaudio: `brew install portaudio`)
+# Python 3.11+; macOS needs portaudio: `brew install portaudio`
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
 # Fill .env (NVIDIA, Deepgram, Cartesia, Twilio, DASHBOARD_API_URL, DASHBOARD_API_TOKEN).
 
-# Smoke-test the postpartum bot end-to-end without placing a real phone call:
+# Smoke-test the postpartum bot end-to-end without placing a real call:
 .venv/bin/python scripts/sim_twilio_ws.py \
     --bot postpartum \
     --patient-id 11111111-1111-1111-1111-111111111111
 ```
 
-Successful output:
+Expected:
+
 ```
 [PASS] ws handshake (ws://127.0.0.1:8080/ws)
 [PASS] greeting audio frames: ...
 [PASS] clean teardown
 ```
 
+To stand up the dashboard side, see [`dashboard/README.md`](./dashboard/README.md).
+
+### Regenerating the diagrams
+
+The five `.svg` files in `docs/img/` are rendered from `.mmd` source.
+Edit the source, then:
+
+```bash
+npx -y -p @mermaid-js/mermaid-cli@latest mmdc \
+    -i docs/img/<name>.mmd -o docs/img/<name>.svg -b transparent
+```
+
 ---
 
-## Dashboard wiring
+## HIPAA posture
 
-`postpartum_bot.py` reads `DASHBOARD_API_URL` + `DASHBOARD_API_TOKEN` from `.env`. If either is unset or the dashboard is unreachable, the agent still takes the call — every dashboard write is best-effort and logs a warning.
+This is a **demo deployment.** All seeded patients are synthetic.
 
-Full API contract for the receiving end lives in `~/Documents/GitHub/timbre_dashboard/README.md`.
+The schema is shaped for real PHI; the deployment is not. See
+[`docs/hipaa-production-path.md`](./docs/hipaa-production-path.md) for
+what changes. The big items:
+
+- BAA-covered LLM (NVIDIA hosted NIMs are **not** BAA-covered — production
+  routes the LLM through Bedrock, Azure OpenAI, or a self-hosted Nemotron
+  NIM on HIPAA-eligible infrastructure).
+- KMS at rest, 6-year audit retention, key rotation, breach SOP.
+- Split `DASHBOARD_API_TOKEN` into two scoped credentials (Pipecat-write,
+  Cekura-write).
+- Org-scoped RLS via `auth.uid()`.
+
+---
+
+## Further reading
+
+- [`CLAUDE.md`](./CLAUDE.md) — project guide and working agreement
+- [`docs/architecture.md`](./docs/architecture.md) — how the pieces fit
+- [`docs/roadmap.md`](./docs/roadmap.md) — milestones, current status
+- [`docs/setup.md`](./docs/setup.md) — accounts, APIs, local env
+- [`POSTPARTUM_FLOW_PRD.md`](./POSTPARTUM_FLOW_PRD.md) — the clinical flow spec
+- [`dashboard/README.md`](./dashboard/README.md) — the console
+- [`dashboard/DESIGN.md`](./dashboard/DESIGN.md) — visual identity (Editorial Warm)
