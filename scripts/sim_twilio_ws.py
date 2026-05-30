@@ -61,6 +61,14 @@ TWIML_URL = f"http://{HOST}:{PORT}/twiml"
 HEALTH_URL = f"http://{HOST}:{PORT}/health"
 SERVER_LOG = Path("/tmp/sim_twilio_server.log")
 
+# Which FastAPI app to boot. The morning-quote bot is the default for
+# backwards compatibility with existing runs. The postpartum flow lives in
+# postpartum_bot:app and gets exercised via --bot postpartum.
+BOT_APPS = {
+    "twilio": "twilio_bot:app",
+    "postpartum": "postpartum_bot:app",
+}
+
 # Fake-but-well-formed Twilio ids. Stream/Account/Call SIDs use Twilio's real
 # prefixes (MZ/AC/CA) so the serializer and our bot parse them exactly as in prod.
 FAKE_STREAM_SID = "MZ00000000000000000000000000000000"
@@ -81,28 +89,40 @@ def _http_ok(url: str, timeout: float = 2.0) -> bool:
         return False
 
 
-def fetch_ws_token(call_sid: str, timeout: float = 15.0) -> str:
+def fetch_ws_token(call_sid: str, patient_id: str | None = None, timeout: float = 15.0) -> tuple[str, str | None]:
     """Mint a per-call token exactly like Twilio does: hit /twiml with our CallSid, then
-    parse the token out of the wss URL it returns. /ws now requires this token, so the sim
-    must go through /twiml first to stay green (and to exercise the real auth path).
+    parse the token (and, for the postpartum bot, the patient_id) out of the XML it
+    returns. /ws requires the token; the postpartum bot also requires patient_id.
 
-    NOTE: /twiml also pre-generates the motivational quote (one NVIDIA call), which can take
-    a few seconds — hence the generous timeout."""
-    url = f"{TWIML_URL}?CallSid={call_sid}"
+    Returns (token, patient_id_from_twiml). patient_id_from_twiml is None for the
+    morning-quote bot (twilio_bot.py) and a UUID for the postpartum bot.
+
+    NOTE: /twiml in twilio_bot.py also pre-generates the motivational quote (one
+    NVIDIA call), which can take a few seconds — hence the generous timeout. For
+    postpartum, /twiml hits the dashboard call-queue if no patient_id is passed."""
+    qs = f"CallSid={call_sid}"
+    if patient_id:
+        qs += f"&patient_id={patient_id}"
+    url = f"{TWIML_URL}?{qs}"
     with urllib.request.urlopen(url, timeout=timeout) as r:
         xml = r.read().decode("utf-8", errors="replace")
-    m = re.search(r'token=([A-Za-z0-9_\-]+)', xml)
+    m = re.search(r'name="token"\s+value="([A-Za-z0-9_\-]+)"', xml) or re.search(
+        r"token=([A-Za-z0-9_\-]+)", xml
+    )
     if not m:
         raise RuntimeError(f"/twiml did not return a token; body was: {xml[:200]}")
-    return m.group(1)
+    token = m.group(1)
+    pm = re.search(r'name="patient_id"\s+value="([^"]*)"', xml)
+    patient_id_out = (pm.group(1) if pm else None) or patient_id
+    return token, patient_id_out
 
 
-def start_server() -> subprocess.Popen:
-    print(f"[sim] starting uvicorn twilio_bot:app on {HOST}:{PORT} …")
+def start_server(app_target: str = "twilio_bot:app") -> subprocess.Popen:
+    print(f"[sim] starting uvicorn {app_target} on {HOST}:{PORT} …")
     SERVER_LOG.write_text("")
     log = SERVER_LOG.open("w")
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "twilio_bot:app", "--host", HOST, "--port", str(PORT)],
+        [sys.executable, "-m", "uvicorn", app_target, "--host", HOST, "--port", str(PORT)],
         cwd=str(SRC_DIR),
         stdout=log,
         stderr=subprocess.STDOUT,
@@ -135,8 +155,13 @@ def stop_server(proc: subprocess.Popen | None) -> None:
             proc.kill()
 
 
-async def run_sim() -> dict:
-    """Drive one mock Twilio call. Returns a results dict for the summary."""
+async def run_sim(patient_id: str | None = None) -> dict:
+    """Drive one mock Twilio call. Returns a results dict for the summary.
+
+    For the postpartum bot, patient_id is required (either passed in here, or
+    /twiml will pull the head of the dashboard call queue). The token + the
+    resolved patient_id flow into the start frame's customParameters exactly as
+    Twilio delivers <Stream><Parameter> children."""
     res = {
         "ws_handshake": False,
         "media_frames": 0,
@@ -153,13 +178,19 @@ async def run_sim() -> dict:
     # Mint the per-call /ws token the same way Twilio would: via /twiml. /ws rejects
     # connections without a matching token (security hardening), so the sim must do this.
     try:
-        token = fetch_ws_token(FAKE_CALL_SID)
-        print("[sim] minted /ws token via /twiml (call auth OK)")
+        token, resolved_patient_id = fetch_ws_token(FAKE_CALL_SID, patient_id=patient_id)
+        print(
+            f"[sim] minted /ws token via /twiml (call auth OK)"
+            + (f"  patient_id={resolved_patient_id}" if resolved_patient_id else "")
+        )
     except Exception as e:  # noqa: BLE001
         res["ws_error"] = f"token mint failed: {type(e).__name__}: {e}"
         return res
 
     connected = {"event": "connected", "protocol": "Call", "version": "1.0.0"}
+    custom_params: dict[str, str] = {"token": token}
+    if resolved_patient_id:
+        custom_params["patient_id"] = resolved_patient_id
     start = {
         "event": "start",
         "sequenceNumber": "1",
@@ -169,11 +200,10 @@ async def run_sim() -> dict:
             "accountSid": FAKE_ACCOUNT_SID,
             "callSid": FAKE_CALL_SID,
             "tracks": ["inbound"],
-            # DUAL-CHANNEL: deliver the token via start.customParameters exactly as Twilio
-            # delivers a <Stream><Parameter>. /ws now validates from EITHER this channel or
-            # the URL query string. We put it HERE (customParameters) to exercise the
-            # officially-supported channel that survives even if the query string is dropped.
-            "customParameters": {"token": token},
+            # DUAL-CHANNEL: deliver token + patient_id via start.customParameters
+            # exactly as Twilio echoes <Stream><Parameter>. /ws validates from
+            # EITHER this channel or the URL query string.
+            "customParameters": custom_params,
             "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
         },
     }
@@ -333,6 +363,17 @@ def print_summary(res: dict, log: dict) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Offline Twilio Media Streams simulator")
     ap.add_argument("--no-server", action="store_true", help="assume uvicorn already running on :8080")
+    ap.add_argument(
+        "--bot",
+        choices=sorted(BOT_APPS.keys()),
+        default="twilio",
+        help="which bot to boot: 'twilio' (morning quote, default) or 'postpartum' (postpartum flow)",
+    )
+    ap.add_argument(
+        "--patient-id",
+        default=None,
+        help="patient UUID to drive the postpartum flow against (skip to use the dashboard queue head)",
+    )
     args = ap.parse_args()
 
     server = None
@@ -343,9 +384,9 @@ def main() -> int:
                 return 2
             print("[sim] using already-running server")
         else:
-            server = start_server()
+            server = start_server(BOT_APPS[args.bot])
 
-        res = asyncio.run(run_sim())
+        res = asyncio.run(run_sim(patient_id=args.patient_id))
         # Give the server a beat to log teardown after we closed the ws.
         time.sleep(1.5)
         log = scan_log()

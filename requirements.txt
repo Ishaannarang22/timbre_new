@@ -6,9 +6,16 @@
 #   local    -> local microphone/speaker transport (Milestone 0, before phone)
 #   nvidia   -> kept for later: NVIDIA speech NIMs once we self-host (M5/M6)
 pipecat-ai[deepgram,openai,cartesia,silero,local,nvidia]
+# Postpartum flow runtime — Pipecat Flows adds a NodeConfig state graph + global tools on
+# top of the base Pipeline (see src/flows/postpartum.py, src/postpartum_bot.py).
+pipecat-ai-flows
 
 # Loads .env into environment variables
 python-dotenv
+
+# Async HTTP client used by src/dashboard_client.py to POST node answers + GET patient profile
+# data against the timbre_dashboard /api/v1/* routes during a postpartum call.
+httpx
 
 # Telephony webhook server + Twilio REST client (run_morning_call.py / twilio_bot.py)
 fastapi
