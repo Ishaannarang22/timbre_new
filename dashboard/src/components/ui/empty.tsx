@@ -13,13 +13,13 @@ export function Empty({
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center rounded-lg border border-dashed border-[hsl(var(--border))] p-10 text-center",
+        "flex flex-col items-center justify-center rounded-md border border-dashed border-[hsl(var(--border))] bg-card/50 px-10 py-12 text-center",
         className,
       )}
     >
-      <div className="text-sm font-medium text-foreground">{title}</div>
+      <div className="font-serif text-[18px] tracking-tight text-foreground">{title}</div>
       {description ? (
-        <div className="mt-1 text-sm text-muted-foreground">{description}</div>
+        <div className="mt-1.5 max-w-md text-sm text-muted-foreground">{description}</div>
       ) : null}
     </div>
   );
