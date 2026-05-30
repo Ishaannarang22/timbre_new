@@ -10,13 +10,13 @@ Status legend: ⬜ not started · 🟦 in progress · ✅ done
 ## W0 — Pure voice pipeline ✅
 STT→LLM→TTS over Twilio, talk-only. Forked from the Mac agent with the entire control harness
 removed. **Teaches:** what the irreducible voice core is.
-- Code: `src/twilio_bot.py` (644 lines), `src/run_morning_call.py`, `src/m0_local_bot.py`
+- Code: `src/twilio_bot.py` (inbound voice companion), `src/m0_local_bot.py`
 - Stack: Deepgram STT + Nemotron LLM (build.nvidia.com) + Cartesia Sonic (Brooke) TTS at 8kHz μ-law.
 - Status: **done** — compiles + imports clean; `/twiml`→`<Connect><Stream>`→`/ws`→Pipecat;
   deterministic greeting, patient Smart-Turn endpointing, goodbye→auto-hangup, per-call ws-token auth.
 
 ## W1 — Wellness persona & prompt 🟦
-Replace the morning-quote persona with a warm **health check-up** conversation: ask how the
+Evolve the companion persona into a warm **health check-up** conversation: ask how the
 person is feeling, follow up on known concerns, keep it natural and unhurried. **Teaches:**
 prompt design for a care conversation; the reasoning-vs-warmth tension.
 - The system prompt is a first-class artifact — iterate it deliberately (see W4).

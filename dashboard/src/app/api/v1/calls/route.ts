@@ -1,13 +1,13 @@
 import { withAgent, z, ok } from "@/lib/api";
 
 const Body = z.object({
-  patient_id: z.string().uuid(),
+  patient_id: z.guid(),
   call_sid: z.string().optional(),
   direction: z.enum(["inbound", "outbound"]).default("outbound"),
   language: z.enum(["en", "es"]).default("en"),
   flow_name: z.string().default("postpartum_v1"),
   // Optional: if the agent is starting a previously-queued call instead of creating new.
-  existing_call_id: z.string().uuid().optional(),
+  existing_call_id: z.guid().optional(),
 });
 
 // POST /api/v1/calls — Pipecat worker creates / starts a call record at /ws connect time.

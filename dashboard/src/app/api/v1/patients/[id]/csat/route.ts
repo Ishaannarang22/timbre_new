@@ -5,7 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { ok } from "@/lib/api";
 
 const Body = z.object({
-  call_id: z.string().uuid(),
+  call_id: z.guid(),
   rating: z.number().int().min(1).max(5),
   qualitative_summary: z.string().optional(),
 });

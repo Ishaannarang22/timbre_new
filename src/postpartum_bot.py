@@ -7,9 +7,9 @@ driven by a Pipecat Flows `FlowManager` running the 7-node postpartum
 NodeConfig graph defined in `src/flows/postpartum.py`. All node answers POST
 to the timbre_dashboard `/api/v1/*` routes in real time.
 
-We deliberately do NOT modify `twilio_bot.py`: the morning-quote bot must keep
-working unchanged for the 7 AM call. Endpointing (Smart Turn v3) and the
-preloaded ONNX session are reused via `build_turn_analyzer()`.
+We deliberately do NOT modify `twilio_bot.py`: the inbound voice companion must
+keep working unchanged. Endpointing (Smart Turn v3) and the preloaded ONNX
+session are reused via `build_turn_analyzer()`.
 
 Flow lifecycle (one call):
   /twiml  ─►  mint per-call ws token, pre-fetch call queue if no patient_id
@@ -71,6 +71,7 @@ from turn_helpers import PatientSmartTurnV3  # noqa: E402
 from dashboard_client import build_dashboard_client, redact  # noqa: E402
 from flows.postpartum import (  # noqa: E402
     build_global_functions,
+    drain_writes,
     initial_node,
     set_flow_context,
 )
@@ -84,7 +85,7 @@ CARTESIA_VOICE_ID = (
 CARTESIA_SPEED = float(os.getenv("CARTESIA_SPEED", "0.95"))
 LLM_MODEL = os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
 SR = 8000  # 8 kHz μ-law, end-to-end
-# Postpartum calls are LONGER than the 150s morning quote. 15 minutes is the
+# Postpartum calls are LONGER than the 150s companion call. 15 minutes is the
 # documented backstop in the PRD; nothing in the flow should run that long but
 # Pipecat stalls do happen, so we keep a safety net.
 MAX_CALL_SECS = float(os.getenv("POSTPARTUM_MAX_CALL_SECS", "900"))
@@ -246,6 +247,10 @@ async def ws(websocket: WebSocket) -> None:
     }
     newborns = profile.get("newborns") or []
     newborn = newborns[0] if newborns else None
+    # Prefetched alongside the profile (one round trip) → mid-call lookups hit memory.
+    billing = profile.get("billing")
+    appointments = profile.get("appointments")
+    prescriptions = profile.get("prescriptions")
     language = (patient.get("language") or "en").lower()
     if language != "es":
         language = "en"
@@ -374,6 +379,9 @@ async def ws(websocket: WebSocket) -> None:
         newborn=newborn,
         call_id=call_id,
         language=language,
+        billing=billing,
+        appointments=appointments,
+        prescriptions=prescriptions,
     )
 
     # Greet the moment audio is live (mirrors twilio_bot.py). After the
@@ -400,6 +408,11 @@ async def ws(websocket: WebSocket) -> None:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"transcript dump failed: {e}")
             transcript = ""
+        # Flush in-flight background writes (e.g. final CSAT) before closing.
+        try:
+            await drain_writes(flow_manager)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"drain_writes failed: {e}")
         try:
             await dashboard.update_call(
                 call_id,

@@ -5,8 +5,8 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { ok } from "@/lib/api";
 
 const Body = z.object({
-  call_id: z.string().uuid(),
-  newborn_id: z.string().uuid(),
+  call_id: z.guid(),
+  newborn_id: z.guid(),
   feeding_count_24h: z.number().int().min(0).max(30).optional(),
   wet_diapers_24h: z.number().int().min(0).max(30).optional(),
   dirty_diapers_24h: z.number().int().min(0).max(30).optional(),

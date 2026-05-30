@@ -30,3 +30,4 @@ docs/playbooks/
 # Deploy secrets (uploaded to Pipecat Cloud, never committed)
 deploy/secrets.env
 deploy/.venv/
+.vercel

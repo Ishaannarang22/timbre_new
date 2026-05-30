@@ -5,7 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { ok } from "@/lib/api";
 
 const Body = z.object({
-  call_id: z.string().uuid().optional(),
+  call_id: z.guid().optional(),
   category: z
     .enum(["clinical", "billing", "scheduling", "facilities", "staff", "communication", "other"])
     .default("other"),

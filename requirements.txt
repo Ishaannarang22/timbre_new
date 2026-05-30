@@ -17,7 +17,7 @@ python-dotenv
 # data against the timbre_dashboard /api/v1/* routes during a postpartum call.
 httpx
 
-# Telephony webhook server + Twilio REST client (run_morning_call.py / twilio_bot.py)
+# Telephony webhook server + Twilio REST client (twilio_bot.py / postpartum_bot.py)
 fastapi
 uvicorn
 twilio

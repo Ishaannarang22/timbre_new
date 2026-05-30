@@ -16,7 +16,8 @@ Safety properties (relied on by the voice path)
   `DASHBOARD_API_TOKEN` is missing we log a single WARN and return a stub. Every
   method on the stub is a no-op that returns `None` so the call still completes.
   This matters because the dashboard is sibling work and may not be live yet —
-  the morning-quote bot still runs against this venv and must not regress.
+  the inbound voice companion (twilio_bot.py) still runs against this venv and
+  must not regress.
 - **5s timeout + 2 retries on TimeoutException only.** Other 4xx/5xx are raised
   as `DashboardError` so node handlers can decide; voice path callers ignore the
   error (logged) and continue. We never retry on non-timeout 5xx because the DB

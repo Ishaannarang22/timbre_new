@@ -5,7 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { ok } from "@/lib/api";
 
 const Body = z.object({
-  call_id: z.string().uuid(),
+  call_id: z.guid(),
   bleeding: z.enum(["none", "spotting", "light", "moderate", "heavy", "concerning"]).optional(),
   pain_score: z.number().int().min(0).max(10).optional(),
   incision_status: z.string().optional(),

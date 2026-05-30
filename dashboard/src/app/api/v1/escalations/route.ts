@@ -1,8 +1,8 @@
 import { withAgent, z, ok } from "@/lib/api";
 
 const Body = z.object({
-  patient_id: z.string().uuid(),
-  call_id: z.string().uuid().optional(),
+  patient_id: z.guid(),
+  call_id: z.guid().optional(),
   severity: z.enum(["urgent", "warning", "info"]).default("urgent"),
   category: z.enum(["maternal", "pediatric", "crisis", "concierge"]).default("maternal"),
   trigger_phrase: z.string().optional(),

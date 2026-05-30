@@ -5,7 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { ok } from "@/lib/api";
 
 const Body = z.object({
-  call_id: z.string().uuid(),
+  call_id: z.guid(),
   instrument: z.enum(["phq2", "phq9", "epds"]),
   score: z.number().int().min(0).max(30),
   responses: z.record(z.string(), z.unknown()).optional(),

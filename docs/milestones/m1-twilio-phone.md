@@ -1,9 +1,16 @@
 # M1/M2 — Twilio phone agent (real two-way conversation)
 
-**Files:** `src/twilio_bot.py` · `src/run_morning_call.py` · `src/call_me.py`
+> **Superseded (2026-05-30):** the morning-quote / 7 AM outbound-alarm flow has been
+> **removed**. `src/run_morning_call.py` (the 7 AM dialer) and `src/call_me.py` (the
+> inline-TwiML quote monologue + `generate_quote()`) are deleted, and `twilio_bot.py` no
+> longer pre-generates or delivers a motivational quote. `twilio_bot.py` is now a plain
+> **inbound voice companion**: you dial the number, it picks up and chats. The telephony
+> engineering below (public URL, endpointing, the goodbye hangup, 8 kHz pipeline) still
+> applies; the morning-call/cron sections are kept only as historical record.
+
+**Files:** `src/twilio_bot.py`
 **Goal:** Take the same STT→LLM→TTS brain from M0 and put it on the telephone. Twilio
-rings your phone; you talk; the agent listens and replies in real-time. A 7 AM cron fires
-it every morning.
+connects the call; you talk; the agent listens and replies in real-time.
 
 ---
 

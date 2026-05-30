@@ -4,10 +4,10 @@ serve_persistent.py — the WARM-TUNNEL DAEMON.
 Why this exists (QA-P0-1 & QA-P0-2):
   Cloudflare *quick-tunnels* are unreliable on a cold start: the URL prints in a
   second but the edge frequently takes minutes (or never) to actually route to the
-  local origin. If the 7 AM orchestrator gambles on a cold tunnel, it silently
-  degrades to a Polly <Say> monologue — the voice the user explicitly REJECTED.
+  local origin. An inbound caller who hits a cold tunnel gets dead air.
 
-  The fix: keep a tunnel ALREADY UP AND WARM, hours before the call. This daemon:
+  The fix: keep a tunnel ALREADY UP AND WARM so an inbound call can land at any
+  time. This daemon:
     1. Holds a `caffeinate -dimsu` assertion so the Mac stays awake (P0-2, no sudo).
     2. Boots uvicorn twilio_bot:app on 127.0.0.1:8090 (cwd=src so imports resolve).
     3. Opens a cloudflared quick-tunnel, parses the trycloudflare URL, waits for
@@ -15,8 +15,8 @@ Why this exists (QA-P0-1 & QA-P0-2):
     4. Atomically writes the live URL + a unix timestamp to logs/tunnel_url.txt.
     5. MONITORS forever: re-checks <url>/health on an interval; if the tunnel dies
        or stops routing, it kills it, opens a FRESH quick-tunnel, re-verifies, and
-       rewrites tunnel_url.txt. The tunnel therefore has hours to stabilise and
-       self-heals; the 7 AM call reuses a warm URL instead of a cold one.
+       rewrites tunnel_url.txt. The tunnel self-heals, so an inbound call always
+       reaches a warm URL instead of a cold one.
 
   Clean teardown on SIGTERM/SIGINT: server, tunnel, AND the caffeinate assertion
   are all killed (process-group kills → no orphans).
@@ -25,7 +25,7 @@ Run (via the venv python, normally under launchd):
     .venv/bin/python scripts/serve_persistent.py
 
 This daemon NEVER places a Twilio call. It only serves /health + /twiml + /ws so
-the orchestrator can point a call at it.
+an inbound Twilio call can be pointed at it.
 """
 
 import http.client
@@ -197,7 +197,7 @@ def kill_proc(proc: "subprocess.Popen | None", name: str = "proc") -> None:
 
 def atomic_write_url(url: str) -> None:
     """Write the live URL + unix ts atomically (write temp, fsync, rename) so a
-    reader (run_morning_call) never sees a half-written file."""
+    reader never sees a half-written file."""
     tmp = URL_FILE.with_suffix(".txt.tmp")
     payload = f"{url}\n{int(time.time())}\n"
     with tmp.open("w") as f:
@@ -247,7 +247,8 @@ def sync_twilio_webhook(url: str) -> None:
 
 
 def start_caffeinate() -> subprocess.Popen:
-    """Hold a power assertion so the Mac doesn't idle-sleep before/at 7 AM.
+    """Hold a power assertion so the Mac doesn't idle-sleep (which would drop the
+    tunnel and make inbound calls fail).
     -d display, -i idle-system, -m disk, -s while-on-AC, -u user-active.
     No sudo required."""
     log("[daemon] starting caffeinate -dimsu (prevent idle sleep)")

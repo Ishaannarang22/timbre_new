@@ -5,8 +5,8 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { ok } from "@/lib/api";
 
 const Body = z.object({
-  call_id: z.string().uuid(),
-  prescription_id: z.string().uuid().optional(),
+  call_id: z.guid(),
+  prescription_id: z.guid().optional(),
   medication: z.string().optional(),
   picked_up: z.boolean().optional(),
   taking_as_prescribed: z.boolean().optional(),

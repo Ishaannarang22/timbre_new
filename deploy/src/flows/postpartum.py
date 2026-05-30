@@ -38,6 +38,7 @@ node keeps the LLM in the current node — Pipecat preserves context.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from loguru import logger
@@ -69,16 +70,66 @@ def set_flow_context(
     newborn: dict | None,
     call_id: str,
     language: str,
+    billing: list[dict] | None = None,
+    appointments: list[dict] | None = None,
+    prescriptions: list[dict] | None = None,
 ) -> None:
     fm.state["client"] = client
     fm.state["patient"] = patient
     fm.state["newborn"] = newborn
     fm.state["call_id"] = call_id
     fm.state["language"] = language
+    # LATENCY: the /api/v1/patients/{id} profile call already returns billing +
+    # appointments + prescriptions in ONE round trip. We stash them here so the
+    # mid-call lookup_* tools answer from memory (zero network) instead of making
+    # a fresh HTTP call while the patient is waiting on the line. None means "not
+    # prefetched" — the lookups fall back to a live fetch in that case.
+    fm.state["billing"] = billing
+    fm.state["appointments"] = appointments
+    fm.state["prescriptions"] = prescriptions
+    # Background DB writes (see _spawn). Per-node answer POSTs fire into here so a
+    # node transition never blocks on Vercel; drain_writes() awaits them at call end
+    # so nothing is lost when the websocket closes.
+    fm.state["_bg_writes"] = set()
     # Track scoring so phq9 knows the phq2 score, and so we can decide
     # whether a recovery red flag warrants escalation rather than recording.
     fm.state["phq2_score"] = None
     fm.state["phq9_score"] = None
+
+
+def _spawn(fm: FlowManager, coro) -> None:
+    """Fire a best-effort DB write WITHOUT blocking the node transition.
+
+    Per-node answer POSTs (recovery, phq, newborn, adherence, csat, feedback) are
+    not needed to decide the next node, so awaiting them inline just adds the
+    Vercel round trip to the gap before the agent's next sentence. We schedule them
+    as background tasks instead, keep a reference so they aren't GC'd mid-flight,
+    and log (never raise) on failure. Life-safety escalations are deliberately NOT
+    routed through here — those stay awaited at their call sites.
+    """
+    bg: set = fm.state.setdefault("_bg_writes", set())
+    task = asyncio.ensure_future(coro)
+    bg.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        bg.discard(t)
+        exc = t.exception() if not t.cancelled() else None
+        if exc is not None:
+            logger.warning(f"background DB write failed (non-fatal): {exc}")
+
+    task.add_done_callback(_done)
+
+
+async def drain_writes(fm: FlowManager, timeout: float = 4.0) -> None:
+    """Await any still-pending background writes (call the bot's disconnect handler
+    here before task.cancel()). Bounded so a hung Vercel write can't wedge teardown."""
+    bg = list(fm.state.get("_bg_writes") or [])
+    if not bg:
+        return
+    try:
+        await asyncio.wait_for(asyncio.gather(*bg, return_exceptions=True), timeout)
+    except asyncio.TimeoutError:
+        logger.warning(f"drain_writes: {len(bg)} write(s) still pending after {timeout}s")
 
 
 def _ctx(fm: FlowManager) -> tuple[DashboardClient, dict, dict | None, str, str]:
@@ -96,12 +147,11 @@ def _lang_key(base: str, lang: str) -> str:
 
 
 async def _patch_current_node(fm: FlowManager, node_name: str) -> None:
-    """PATCH /api/v1/calls/{id} with current_node. Best-effort — never throws."""
+    """PATCH /api/v1/calls/{id} with current_node. Pure telemetry for the dashboard's
+    live call view — not on the decision path — so it fires in the background and the
+    transition never waits on it. Kept `async` so call sites are unchanged."""
     client, _, _, call_id, _ = _ctx(fm)
-    try:
-        await client.update_call(call_id, current_node=node_name)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"patch current_node={node_name} failed (non-fatal): {e}")
+    _spawn(fm, client.update_call(call_id, current_node=node_name))
 
 
 # ---------------------------------------------------------------------------
@@ -126,16 +176,13 @@ async def verify_identity(
 
 async def end_proxy(_args: FlowArgs, fm: FlowManager) -> tuple[dict, NodeConfig | None]:
     client, patient, _, _, _ = _ctx(fm)
-    try:
-        await client.post_feedback(
-            patient["id"],
-            category="scheduling",
-            note="Proxy answered the postpartum check-in call; rescheduling needed.",
-            sentiment="neutral",
-            call_id=fm.state["call_id"],
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"post_feedback (proxy reschedule) failed: {e}")
+    _spawn(fm, client.post_feedback(
+        patient["id"],
+        category="scheduling",
+        note="Proxy answered the postpartum check-in call; rescheduling needed.",
+        sentiment="neutral",
+        call_id=fm.state["call_id"],
+    ))
     await _patch_current_node(fm, "END")
     return {"ok": True}, build_end_node(fm, reason="proxy_reschedule")
 
@@ -144,20 +191,17 @@ async def record_recovery(
     args: FlowArgs, fm: FlowManager
 ) -> tuple[dict, NodeConfig | None]:
     client, patient, _, call_id, _ = _ctx(fm)
-    try:
-        await client.post_recovery(
-            patient["id"],
-            call_id,
-            bleeding=args.get("bleeding"),
-            pain_score=args.get("pain_score"),
-            incision_status=args.get("incision_status"),
-            mobility_status=args.get("mobility_status"),
-            urination_status=args.get("urination_status"),
-            emotional_state=args.get("emotional_state"),
-            notes=args.get("notes"),
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"post_recovery failed: {e}")
+    _spawn(fm, client.post_recovery(
+        patient["id"],
+        call_id,
+        bleeding=args.get("bleeding"),
+        pain_score=args.get("pain_score"),
+        incision_status=args.get("incision_status"),
+        mobility_status=args.get("mobility_status"),
+        urination_status=args.get("urination_status"),
+        emotional_state=args.get("emotional_state"),
+        notes=args.get("notes"),
+    ))
     await _patch_current_node(fm, "mental_health_phq2")
     return {"recorded": True}, build_phq2_node(fm)
 
@@ -170,16 +214,13 @@ async def record_phq2(
     q2 = int(args.get("q2", 0))
     score = q1 + q2
     fm.state["phq2_score"] = score
-    try:
-        await client.post_phq(
-            patient["id"],
-            call_id,
-            instrument="phq2",
-            score=score,
-            responses={"q1": q1, "q2": q2},
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"post_phq2 failed: {e}")
+    _spawn(fm, client.post_phq(
+        patient["id"],
+        call_id,
+        instrument="phq2",
+        score=score,
+        responses={"q1": q1, "q2": q2},
+    ))
     if score >= 3:
         await _patch_current_node(fm, "phq9_full")
         return {"score": score, "elevated": True}, build_phq9_node(fm)
@@ -194,17 +235,14 @@ async def record_phq9(
     score = int(args.get("score", 0))
     suicidal = bool(args.get("suicidal_ideation"))
     fm.state["phq9_score"] = score
-    try:
-        await client.post_phq(
-            patient["id"],
-            call_id,
-            instrument="phq9",
-            score=score,
-            responses=args.get("responses") or {},
-            suicidal_ideation=suicidal,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"post_phq9 failed: {e}")
+    _spawn(fm, client.post_phq(
+        patient["id"],
+        call_id,
+        instrument="phq9",
+        score=score,
+        responses=args.get("responses") or {},
+        suicidal_ideation=suicidal,
+    ))
     if suicidal:
         # Auto-fire the crisis escalation; the model is also instructed to call
         # escalate_crisis but we don't trust the LLM with a life-safety branch.
@@ -235,22 +273,19 @@ async def record_newborn(
         logger.warning("record_newborn called but no newborn in state; skipping POST")
         await _patch_current_node(fm, "medication_adherence")
         return {"recorded": False}, build_medication_adherence_node(fm)
-    try:
-        await client.post_newborn(
-            patient["id"],
-            call_id,
-            newborn["id"],
-            feeding_count_24h=args.get("feeding_count_24h"),
-            wet_diapers_24h=args.get("wet_diapers_24h"),
-            dirty_diapers_24h=args.get("dirty_diapers_24h"),
-            jaundice_observed=args.get("jaundice_observed"),
-            fever=args.get("fever"),
-            fever_temp_f=args.get("fever_temp_f"),
-            sleep_pattern=args.get("sleep_pattern"),
-            notes=args.get("notes"),
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"post_newborn failed: {e}")
+    _spawn(fm, client.post_newborn(
+        patient["id"],
+        call_id,
+        newborn["id"],
+        feeding_count_24h=args.get("feeding_count_24h"),
+        wet_diapers_24h=args.get("wet_diapers_24h"),
+        dirty_diapers_24h=args.get("dirty_diapers_24h"),
+        jaundice_observed=args.get("jaundice_observed"),
+        fever=args.get("fever"),
+        fever_temp_f=args.get("fever_temp_f"),
+        sleep_pattern=args.get("sleep_pattern"),
+        notes=args.get("notes"),
+    ))
 
     # Route based on what the LLM detected — feeding_issue is a soft signal,
     # red_flag is a hard escalation. We trust the LLM here because the prompt
@@ -267,16 +302,13 @@ async def record_lactation(
     args: FlowArgs, fm: FlowManager
 ) -> tuple[dict, NodeConfig | None]:
     client, patient, _, call_id, _ = _ctx(fm)
-    try:
-        await client.post_feedback(
-            patient["id"],
-            category="clinical",
-            note=f"Lactation support discussed: {args.get('note', 'feeding struggle')}",
-            sentiment="neutral",
-            call_id=call_id,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"post_feedback (lactation) failed: {e}")
+    _spawn(fm, client.post_feedback(
+        patient["id"],
+        category="clinical",
+        note=f"Lactation support discussed: {args.get('note', 'feeding struggle')}",
+        sentiment="neutral",
+        call_id=call_id,
+    ))
     await _patch_current_node(fm, "medication_adherence")
     return {"recorded": True}, build_medication_adherence_node(fm)
 
@@ -288,19 +320,16 @@ async def record_adherence(
     last one via args["last"]=true; we only route forward then."""
     client, patient, _, call_id, _ = _ctx(fm)
     barrier = args.get("barrier") or "none"
-    try:
-        await client.post_adherence(
-            patient["id"],
-            call_id,
-            medication=args.get("medication"),
-            prescription_id=args.get("prescription_id"),
-            picked_up=args.get("picked_up"),
-            taking_as_prescribed=args.get("taking_as_prescribed"),
-            barrier=barrier,
-            barrier_notes=args.get("barrier_notes"),
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"post_adherence failed: {e}")
+    _spawn(fm, client.post_adherence(
+        patient["id"],
+        call_id,
+        medication=args.get("medication"),
+        prescription_id=args.get("prescription_id"),
+        picked_up=args.get("picked_up"),
+        taking_as_prescribed=args.get("taking_as_prescribed"),
+        barrier=barrier,
+        barrier_notes=args.get("barrier_notes"),
+    ))
 
     routing_barriers = {"cost", "transport", "no_pharmacy"}
     if args.get("last"):
@@ -319,16 +348,13 @@ async def log_pharmacy_routing(
     client, patient, _, call_id, _ = _ctx(fm)
     barrier = args.get("barrier") or "cost"
     category = "billing" if barrier == "cost" else "scheduling"
-    try:
-        await client.post_feedback(
-            patient["id"],
-            category=category,
-            note=f"Pharmacy barrier ({barrier}): {args.get('summary', '')}".strip(": "),
-            sentiment="negative" if barrier == "cost" else "neutral",
-            call_id=call_id,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"log_pharmacy_routing post_feedback failed: {e}")
+    _spawn(fm, client.post_feedback(
+        patient["id"],
+        category=category,
+        note=f"Pharmacy barrier ({barrier}): {args.get('summary', '')}".strip(": "),
+        sentiment="negative" if barrier == "cost" else "neutral",
+        call_id=call_id,
+    ))
     await _patch_current_node(fm, "social_screen")
     return {"logged": True}, build_social_node(fm)
 
@@ -338,24 +364,27 @@ async def record_social(
 ) -> tuple[dict, NodeConfig | None]:
     client, patient, _, call_id, _ = _ctx(fm)
     ipv = (args.get("ipv_concern") or "none").lower()
-    try:
-        if not args.get("food_secure", True):
-            await client.post_feedback(
-                patient["id"],
-                category="other",
-                note="Food insecurity reported on social screen.",
-                sentiment="negative",
-                call_id=call_id,
-            )
-        if not args.get("has_support", True):
-            await client.post_feedback(
-                patient["id"],
-                category="other",
-                note="Limited postpartum support at home reported.",
-                sentiment="negative",
-                call_id=call_id,
-            )
-        if ipv == "current_active_danger":
+    # Non-urgent screen findings: background writes (don't delay the next prompt).
+    if not args.get("food_secure", True):
+        _spawn(fm, client.post_feedback(
+            patient["id"],
+            category="other",
+            note="Food insecurity reported on social screen.",
+            sentiment="negative",
+            call_id=call_id,
+        ))
+    if not args.get("has_support", True):
+        _spawn(fm, client.post_feedback(
+            patient["id"],
+            category="other",
+            note="Limited postpartum support at home reported.",
+            sentiment="negative",
+            call_id=call_id,
+        ))
+    # Active-danger IPV is life-safety: AWAIT so the escalation is durably posted
+    # before we transition (never route this through the background _spawn path).
+    if ipv == "current_active_danger":
+        try:
             await client.post_escalation(
                 patient["id"],
                 severity="urgent",
@@ -364,8 +393,8 @@ async def record_social(
                 trigger_text="Patient reports active intimate-partner violence danger on social screen.",
                 call_id=call_id,
             )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"record_social side effects failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"record_social IPV escalation failed: {e}")
     if ipv == "current_active_danger":
         await _patch_current_node(fm, "escalation_handoff")
         return {"escalated": True}, build_escalation_handoff_node(
@@ -388,12 +417,11 @@ async def record_csat(
     client, patient, _, call_id, _ = _ctx(fm)
     rating = int(args.get("rating", 0)) or 0
     summary = args.get("qualitative_summary") or None
-    try:
-        await client.post_csat(
-            patient["id"], call_id, rating=rating, qualitative_summary=summary
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"post_csat failed: {e}")
+    # CSAT is the last write before END — _spawn + drain_writes() on disconnect
+    # makes sure it lands even though we don't block the goodbye on it.
+    _spawn(fm, client.post_csat(
+        patient["id"], call_id, rating=rating, qualitative_summary=summary
+    ))
     await _patch_current_node(fm, "END")
     return {"recorded": True}, build_end_node(fm, reason="csat_complete")
 
@@ -542,11 +570,15 @@ async def lookup_patient_billing(
     _args: FlowArgs, fm: FlowManager
 ) -> tuple[dict, NodeConfig | None]:
     client, patient, _, _, _ = _ctx(fm)
-    try:
-        items = await client.get_patient_billing(patient["id"])
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"lookup_patient_billing failed: {e}")
-        items = []
+    # LATENCY: served from the profile bundle prefetched at call start — no network
+    # round trip while she waits. Falls back to a live fetch only if not prefetched.
+    items = fm.state.get("billing")
+    if items is None:
+        try:
+            items = await client.get_patient_billing(patient["id"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"lookup_patient_billing fetch failed: {e}")
+            items = []
     return {"answer": _format_billing(items)}, None
 
 
@@ -555,11 +587,13 @@ async def lookup_appointment_history(
 ) -> tuple[dict, NodeConfig | None]:
     client, patient, _, _, _ = _ctx(fm)
     window = (args.get("time_window") or "upcoming").lower()
-    try:
-        items = await client.get_patient_appointments(patient["id"])
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"lookup_appointment_history failed: {e}")
-        items = []
+    items = fm.state.get("appointments")
+    if items is None:
+        try:
+            items = await client.get_patient_appointments(patient["id"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"lookup_appointment_history fetch failed: {e}")
+            items = []
     return {"answer": _format_appointments(items, window)}, None
 
 
@@ -568,11 +602,13 @@ async def lookup_prescription_status(
 ) -> tuple[dict, NodeConfig | None]:
     client, patient, _, _, _ = _ctx(fm)
     hint = args.get("medication_hint")
-    try:
-        items = await client.get_patient_prescriptions(patient["id"])
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"lookup_prescription_status failed: {e}")
-        items = []
+    items = fm.state.get("prescriptions")
+    if items is None:
+        try:
+            items = await client.get_patient_prescriptions(patient["id"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"lookup_prescription_status fetch failed: {e}")
+            items = []
     return {"answer": _format_prescriptions(items, hint)}, None
 
 
@@ -585,16 +621,13 @@ async def capture_feedback(
     sentiment = args.get("sentiment") or "neutral"
     if not note:
         return {"captured": False}, None
-    try:
-        await client.post_feedback(
-            patient["id"],
-            category=category,
-            note=note,
-            sentiment=sentiment,
-            call_id=call_id,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"capture_feedback post failed: {e}")
+    _spawn(fm, client.post_feedback(
+        patient["id"],
+        category=category,
+        note=note,
+        sentiment=sentiment,
+        call_id=call_id,
+    ))
     return {"captured": True}, None
 
 

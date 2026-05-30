@@ -17,7 +17,7 @@ Done when:
 - `prompts/prompts.json` has one entry per node + per global function.
 - `src/postpartum_bot.py` is a new entrypoint that runs the Flow over the same Twilio + Deepgram + Nemotron + Cartesia pipeline as `twilio_bot.py`.
 - A simulated dry-run with `scripts/sim_twilio_ws.py` walks all 7 nodes end-to-end and successfully POSTs to the dashboard.
-- **The existing morning-quote bot (`twilio_bot.py`, `run_morning_call.py`) still works unchanged.** Ishaan's 7 AM call must not break.
+- **The existing inbound voice companion (`twilio_bot.py`) still works unchanged.**
 
 ---
 
@@ -57,14 +57,12 @@ These are two different systems with **non-overlapping responsibilities**. Cross
 ├── requirements.txt        # current Pipecat deps
 ├── prompts/prompts.json    # one prompt right now (m0_local_mic_voice_agent)
 ├── src/
-│   ├── twilio_bot.py       # 644 lines — production phone webhook + Pipecat pipeline
+│   ├── twilio_bot.py       # inbound voice companion — production phone webhook + Pipecat pipeline
 │   │                       # Pattern to mirror: /twiml + /ws + per-call token + greeting seed
 │   │                       # + Smart Turn endpointing + GoodbyeProcessor.
 │   ├── m0_local_bot.py     # local-mic dev variant. Same brain, no telephony.
 │   ├── prompts.py          # tiny loader for prompts/prompts.json
-│   ├── turn_helpers.py     # PatientSmartTurnV3 — prosody endpointing
-│   ├── run_morning_call.py # the 7 AM outbound dialer
-│   └── call_me.py          # generate_quote() helper
+│   └── turn_helpers.py     # PatientSmartTurnV3 — prosody endpointing
 ├── scripts/
 │   ├── sim_twilio_ws.py    # simulator — use this for end-to-end test
 │   ├── serve_persistent.py # the production webhook server
@@ -105,7 +103,7 @@ Full API contract is in `~/Documents/GitHub/timbre_dashboard/README.md` (the tab
 | Feedback capture | Always available globally. The agent may also explicitly ask at end-of-CSAT: "Anything you'd like the hospital to hear?" |
 | Telephony entrypoint | NEW file `src/postpartum_bot.py`. Do not modify `src/twilio_bot.py`. |
 | Greeting | Like `twilio_bot.py`, seed a deterministic first turn so the model can't re-greet on barge-in. English: `"Hi {preferred_name}, this is Maya from Raya Memorial calling to check in on you and the baby. Is this a good time?"`. Spanish equivalent. |
-| Backstop | Keep `MAX_CALL_SECS` guard from `twilio_bot.py`. Set to **900s (15 min)** for postpartum — much longer than the morning-quote 150s. |
+| Backstop | Keep `MAX_CALL_SECS` guard from `twilio_bot.py`. Set to **900s (15 min)** for postpartum — much longer than the companion's 150s. |
 | Call records | At /ws connect time, POST `/api/v1/calls` to create the row (capture the returned `call_id` — every downstream POST needs it). On every node transition PATCH `/api/v1/calls/{id}` with `current_node`. On disconnect, PATCH with `status='completed'` and `ended_at=now()`. |
 | PII redaction | Demo-grade. Strip phone numbers, emails, SSNs, and address-looking strings from the `transcript_redacted` field before POSTing to `/api/v1/calls/{id}`. Use a simple regex pass — Presidio is overkill for the demo. |
 
@@ -309,7 +307,7 @@ If `sim_twilio_ws.py` doesn't support a `--bot` flag yet, add one (small change)
 
 ### 9. (Optional, only if Twilio is reachable) live smoke test
 
-Dial yourself once: `python src/run_morning_call.py` with the postpartum bot wired. **Don't** modify `run_morning_call.py` — copy it to `src/run_postpartum_call.py` and point it at `postpartum_bot.py`.
+Dial yourself once with a small REST dialer (e.g. adapt `deploy/dialout_test.py`) pointed at the postpartum webhook — place a Twilio outbound call whose `/twiml` URL is the running `postpartum_bot:app`.
 
 ### 10. Report back
 
@@ -323,7 +321,7 @@ Reply with:
 
 ## Constraints (hard rules)
 
-- **Never touch** `src/twilio_bot.py`, `src/run_morning_call.py`, `src/m0_local_bot.py`, `src/call_me.py`, `src/turn_helpers.py`. They're the morning-quote demo and must keep working.
+- **Never touch** `src/twilio_bot.py`, `src/m0_local_bot.py`, `src/turn_helpers.py`. `twilio_bot.py` is the inbound voice companion and must keep working; `turn_helpers.py` is shared endpointing.
 - **Never commit `.env`** or any file containing API keys.
 - **Never** send raw transcript text to the dashboard's `transcript_redacted` field without running `redact()` over it.
 - **Never** ask the LLM to invent medical facts. PHQ-2 must use the standard 2 questions verbatim. Red-flag lists must come from the prompts (treated as policy), not the model.
@@ -338,7 +336,7 @@ Reply with:
 - HIPAA production hardening (BAA, KMS, audit retention, key rotation). Kanika's separate `docs/hipaa-production-path.md` work.
 - **Cekura MCP wiring + persona files + eval-running.** See the boundary table at the top — Cekura lives outside this repo. Hand-offs to Cekura happen via the dashboard's `/api/v1/evals` routes, which Cekura's own runner calls; no code in `timbre_new/` triggers an eval.
 - Self-hosting NVIDIA Nemotron, Parakeet, Magpie (W5 roadmap item).
-- Replacing the morning-quote bot.
+- Replacing or modifying the inbound voice companion (`twilio_bot.py`).
 - Frontend / dashboard edits.
 - Vercel deploy.
 

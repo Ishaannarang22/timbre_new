@@ -60,6 +60,7 @@ from dashboard_client import build_dashboard_client, redact  # noqa: E402
 from flows.postpartum import (  # noqa: E402
     build_global_functions,
     build_mother_recovery_node,
+    drain_writes,
     initial_node,
     set_flow_context,
 )
@@ -97,7 +98,10 @@ def build_greeting(preferred: str, language: str) -> str:
 async def run_postpartum(transport: FastAPIWebsocketTransport, handle_sigint: bool, *,
                          patient: dict, newborn: dict | None, language: str,
                          call_sid: str, dashboard, greeting: str,
-                         had_profile: bool) -> None:
+                         had_profile: bool, call_id: str,
+                         billing: list | None = None,
+                         appointments: list | None = None,
+                         prescriptions: list | None = None) -> None:
     stt = DeepgramSTTService(api_key=os.environ["DEEPGRAM_API_KEY"], sample_rate=SR)
     llm = OpenAILLMService(
         api_key=os.environ["NVIDIA_API_KEY"],
@@ -152,7 +156,6 @@ async def run_postpartum(transport: FastAPIWebsocketTransport, handle_sigint: bo
         ),
     )
 
-    call_id = f"cloud-{call_sid[-8:]}" if call_sid else "cloud-unknown"
     flow_manager = FlowManager(
         worker=task,
         llm=llm,
@@ -167,6 +170,11 @@ async def run_postpartum(transport: FastAPIWebsocketTransport, handle_sigint: bo
         newborn=newborn,
         call_id=call_id,
         language=language,
+        # Prefetched at call start — lets the mid-call lookup_* tools answer from
+        # memory with no network round trip (see flows.postpartum.set_flow_context).
+        billing=billing,
+        appointments=appointments,
+        prescriptions=prescriptions,
     )
 
     # Identity verification needs a loaded patient record (a DOB to match against). With no
@@ -193,9 +201,20 @@ async def run_postpartum(transport: FastAPIWebsocketTransport, handle_sigint: bo
         except Exception as e:  # noqa: BLE001
             logger.warning(f"transcript dump failed: {e}")
             transcript = ""
+        # Flush any still-in-flight background writes (e.g. the final CSAT) before
+        # we close the connection, so non-blocking POSTs aren't lost on teardown.
         try:
-            await dashboard.update_call(call_id, status="completed",
-                                        transcript_redacted=redact(transcript)[:200_000])
+            await drain_writes(flow_manager)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"drain_writes failed: {e}")
+        try:
+            from datetime import datetime, timezone
+            await dashboard.update_call(
+                call_id,
+                status="completed",
+                ended_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                transcript_redacted=redact(transcript)[:200_000],
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"final update_call failed: {e}")
         if hasattr(dashboard, "aclose"):
@@ -248,11 +267,33 @@ async def bot(runner_args: RunnerArguments):
     }
     newborns = profile.get("newborns") or []
     newborn = newborns[0] if newborns else None
+    # Prefetched companions to the profile (one round trip already returned them):
+    # passed into flow state so mid-call lookups need no further network calls.
+    billing = profile.get("billing")
+    appointments = profile.get("appointments")
+    prescriptions = profile.get("prescriptions")
     preferred = patient.get("preferred_name") or (patient.get("name", "there").split() or ["there"])[0]
     greeting = build_greeting(preferred, language)
 
+    # Create the call row up front so EVERY per-node write references a real call_id
+    # (without this, writes carry a fake "cloud-…" id and orphan / FK-fail). Only when
+    # we have a real loaded profile + live dashboard; otherwise keep the placeholder so
+    # the Phase-1 no-dashboard test path still runs.
+    call_dir = "inbound" if direction == "inbound" else "outbound"
+    call_id = f"cloud-{call_sid[-8:]}" if call_sid else "cloud-unknown"
+    if had_profile:
+        try:
+            call_row = await dashboard.start_call(
+                patient["id"], call_sid=call_sid, direction=call_dir,
+                language=language, flow_name="postpartum_v1",
+            )
+            if isinstance(call_row, dict) and call_row.get("id"):
+                call_id = call_row["id"]
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"start_call failed; using placeholder call_id {call_id}: {e}")
+
     logger.info(f"bot() postpartum start — direction={direction} call_sid={call_sid} "
-                f"patient_id={patient_id or '(none)'} language={language}")
+                f"patient_id={patient_id or '(none)'} language={language} call_id={call_id}")
 
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
@@ -276,7 +317,8 @@ async def bot(runner_args: RunnerArguments):
         transport, runner_args.handle_sigint,
         patient=patient, newborn=newborn, language=language,
         call_sid=call_sid, dashboard=dashboard, greeting=greeting,
-        had_profile=had_profile,
+        had_profile=had_profile, call_id=call_id,
+        billing=billing, appointments=appointments, prescriptions=prescriptions,
     )
 
 

@@ -24,8 +24,8 @@ IMPORTANT / SAFETY
 ------------------
 - No real Twilio call is placed. We only hit http(s)://127.0.0.1 locally.
 - The sim first calls /twiml (with the fake CallSid) to mint a per-call /ws token, exactly
-  as Twilio would, since /ws now rejects tokenless connections. /twiml also pre-generates
-  the quote (one NVIDIA call), so it's keyed by the fake CallSid and popped in /ws.
+  as Twilio would, since /ws now rejects tokenless connections. The token is keyed by the
+  fake CallSid and popped in /ws.
 - On clean ws close the server runs on_client_disconnected -> task.cancel(), which
   emits a CancelFrame. TwilioFrameSerializer.auto_hang_up will then POST a
   call-hangup to Twilio's REST API for our FAKE CallSid -> Twilio replies 404 (call
@@ -61,7 +61,7 @@ TWIML_URL = f"http://{HOST}:{PORT}/twiml"
 HEALTH_URL = f"http://{HOST}:{PORT}/health"
 SERVER_LOG = Path("/tmp/sim_twilio_server.log")
 
-# Which FastAPI app to boot. The morning-quote bot is the default for
+# Which FastAPI app to boot. The inbound voice companion is the default for
 # backwards compatibility with existing runs. The postpartum flow lives in
 # postpartum_bot:app and gets exercised via --bot postpartum.
 BOT_APPS = {
@@ -95,11 +95,10 @@ def fetch_ws_token(call_sid: str, patient_id: str | None = None, timeout: float 
     returns. /ws requires the token; the postpartum bot also requires patient_id.
 
     Returns (token, patient_id_from_twiml). patient_id_from_twiml is None for the
-    morning-quote bot (twilio_bot.py) and a UUID for the postpartum bot.
+    inbound voice companion (twilio_bot.py) and a UUID for the postpartum bot.
 
-    NOTE: /twiml in twilio_bot.py also pre-generates the motivational quote (one
-    NVIDIA call), which can take a few seconds — hence the generous timeout. For
-    postpartum, /twiml hits the dashboard call-queue if no patient_id is passed."""
+    NOTE: for postpartum, /twiml hits the dashboard call-queue if no patient_id is
+    passed, which can take a few seconds — hence the generous timeout."""
     qs = f"CallSid={call_sid}"
     if patient_id:
         qs += f"&patient_id={patient_id}"
@@ -367,7 +366,7 @@ def main() -> int:
         "--bot",
         choices=sorted(BOT_APPS.keys()),
         default="twilio",
-        help="which bot to boot: 'twilio' (morning quote, default) or 'postpartum' (postpartum flow)",
+        help="which bot to boot: 'twilio' (voice companion, default) or 'postpartum' (postpartum flow)",
     )
     ap.add_argument(
         "--patient-id",
