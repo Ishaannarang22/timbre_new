@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.timbre.tunnel</string>
+
+    <!-- Run the warm-tunnel daemon via its wrapper (sets PATH + cwd, tees log). -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/node3/projects/voice_fun/scripts/serve_persistent.sh</string>
+    </array>
+
+    <!-- cloudflared (/opt/homebrew/bin) + system tools must be on PATH. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Start now (warm the tunnel hours before 7 AM) and restart if it ever dies. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Don't hammer cloudflare/uvicorn if it crash-loops. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/node3/projects/voice_fun</string>
+
+    <!-- launchd-level stdout/stderr (the daemon also writes tunnel_daemon.log). -->
+    <key>StandardOutPath</key>
+    <string>/Users/node3/projects/voice_fun/logs/launchd_tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/node3/projects/voice_fun/logs/launchd_tunnel.log</string>
+</dict>
+</plist>

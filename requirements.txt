@@ -1,0 +1,17 @@
+# Pipecat + the integrations we use. Extras pull in only what each piece needs:
+#   deepgram -> DeepgramSTTService (speech-to-text)
+#   openai   -> OpenAILLMService, pointed at NVIDIA's Nemotron endpoint (the LLM/brain)
+#   cartesia -> CartesiaTTSService (expressive text-to-speech)
+#   silero   -> Silero VAD (detects when the user is speaking)
+#   local    -> local microphone/speaker transport (Milestone 0, before phone)
+#   nvidia   -> kept for later: NVIDIA speech NIMs once we self-host (M5/M6)
+pipecat-ai[deepgram,openai,cartesia,silero,local,nvidia]
+
+# Loads .env into environment variables
+python-dotenv
+
+# Telephony webhook server + Twilio REST client (run_morning_call.py / twilio_bot.py)
+fastapi
+uvicorn
+twilio
+python-multipart  # FastAPI form parsing for Twilio's POST to /twiml

@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Secrets — never commit
+.env
+
+# OS
+.DS_Store
+
+# Benchmark / run logs
+logs/
+*.log
+
+# Agent memory store — local + private cross-call memory (never commit)
+data/
+*.db
+
+# Local working docs — research notes & playbooks, not tracked source
+docs/research/
+docs/playbooks/
+
+# Claude Code local state + linked worktrees — never commit
+.claude/
