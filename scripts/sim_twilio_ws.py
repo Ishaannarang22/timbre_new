@@ -83,7 +83,7 @@ def _http_ok(url: str, timeout: float = 2.0) -> bool:
 
 def fetch_ws_token(call_sid: str, timeout: float = 15.0) -> str:
     """Mint a per-call token exactly like Twilio does: hit /twiml with our CallSid, then
-    parse the token out of the wss URL it returns. /ws now requires this token, so the sim
+    parse the token out of the <Stream><Parameter> it returns. /ws now requires this token, so the sim
     must go through /twiml first to stay green (and to exercise the real auth path).
 
     NOTE: /twiml also pre-generates the motivational quote (one NVIDIA call), which can take
@@ -91,7 +91,7 @@ def fetch_ws_token(call_sid: str, timeout: float = 15.0) -> str:
     url = f"{TWIML_URL}?CallSid={call_sid}"
     with urllib.request.urlopen(url, timeout=timeout) as r:
         xml = r.read().decode("utf-8", errors="replace")
-    m = re.search(r'token=([A-Za-z0-9_\-]+)', xml)
+    m = re.search(r'<Parameter name="token" value="([A-Za-z0-9_\-]+)"\s*/>', xml)
     if not m:
         raise RuntimeError(f"/twiml did not return a token; body was: {xml[:200]}")
     return m.group(1)
@@ -178,8 +178,8 @@ async def run_sim() -> dict:
         },
     }
 
-    # We also still append ?token=... to the ws URL, so the sim mirrors a real Twilio call
-    # which carries the token on BOTH channels.
+    # Also append ?token=... so this regression test exercises /ws's fallback query-string
+    # channel. Real Twilio delivers the token through start.customParameters.
     ws_url = f"{WS_URL}?token={token}"
 
     try:

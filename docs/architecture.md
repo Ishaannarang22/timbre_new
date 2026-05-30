@@ -84,3 +84,15 @@ injects "what to remember about this caller" into the next call's system prompt,
 can query memory live via `recall_memory` / save a fact via `remember_this`.
 ```
 ```
+
+## Cekura observability
+Completed Pipecat/Twilio calls are exported to Cekura from `src/cekura_observability.py`
+when `CEKURA_API_KEY` and `CEKURA_AGENT_ID` (or `CEKURA_ASSISTANT_ID`) are configured.
+The exporter sends the scrubbed user/assistant transcript and call metadata in a background
+worker, so analytics failures cannot delay or break a live call.
+
+Audio analysis is separately opt-in with `CEKURA_RECORD_CALLS=true`. When enabled, `/twiml`
+starts a Twilio dual-channel recording, `/recording-status` receives Twilio's completion
+callback, and the exporter downloads the authenticated WAV from Twilio before uploading it
+to Cekura. Do not enable recording until the caller disclosure, consent, and retention policy
+are appropriate for every jurisdiction where the agent is used.

@@ -15,3 +15,4 @@ fastapi
 uvicorn
 twilio
 python-multipart  # FastAPI form parsing for Twilio's POST to /twiml
+requests          # Post-call Cekura observability export + optional Twilio audio download
