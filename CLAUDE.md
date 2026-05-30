@@ -1,9 +1,16 @@
-# voice_fun — Project Guide
+# timbre — Project Guide
 
 ## What this project is
-Building & customizing **high-reasoning voice engines**: NVIDIA-accelerated open-weight
-models (Nemotron family) running on AWS, fronted by a **Pipecat + Twilio** phone agent.
-This is a structured **learning** project as much as a build.
+A **wellness & health check-up voice agent**: a phone companion that calls people (or takes
+their calls), has a warm spoken conversation, and reads/updates their wellness records in a
+**database**. Built on NVIDIA open-weight reasoning models (Nemotron family) fronted by a
+**Pipecat + Twilio** phone pipeline. This is a structured **learning** project as much as a build.
+
+> **Pivot note (2026-05-30):** timbre began as a Mac-control voice assistant. That entire
+> harness — the AppleScript tool registry, the GLM tool factory, per-call confirmation,
+> cross-call Mac memory — has been **removed**. The agent no longer controls a computer. It
+> talks, and (next) it works against a wellness database. The voice + telephony infra is
+> unchanged. The pre-pivot version is archived in the original `voice_fun` working copy.
 
 ## Working agreement (how Claude should work here)
 - **Teach while building.** Narrate the reasoning behind each choice.
@@ -11,33 +18,37 @@ This is a structured **learning** project as much as a build.
 - **Document as we go** in the `docs/` folder. `docs/` is the source of truth for design.
 - Prefer **small, runnable increments** over large drops.
 - Update `docs/roadmap.md` as milestones complete.
+- **Continuously improve the prompt & context.** The agent's quality lives in its system
+  prompt and the wellness context we feed it — treat both as first-class, iterated artifacts.
 
 ## The stack
 - **Orchestration:** Pipecat (Python) — the STT→LLM→TTS pipeline.
 - **Telephony:** Twilio Media Streams (WebSocket transport, 8kHz μ-law).
 - **Models (start on NVIDIA's free hosted NIMs, self-host/customize later):**
   - LLM: NVIDIA **Nemotron** via `build.nvidia.com` (OpenAI-compatible endpoint) → AWS/self-host later.
-  - STT: **Nemotron-Speech / Parakeet** via `build.nvidia.com` (`NvidiaSTTService`).
-  - TTS: **Magpie-TTS** via `build.nvidia.com` (`NvidiaTTSService`).
-- **Compute:** Start with NVIDIA's hosted endpoints (just an `nvapi-` key — no AWS, no GPU bill).
-  Graduate to AWS (Bedrock / SageMaker JumpStart NIM, then GPU instances) when customizing — M5+.
+  - STT: **Deepgram** today (NVIDIA speech is partner-gated for our key) → NVIDIA Parakeet/Nemotron-Speech when self-hosted.
+  - TTS: **Cartesia Sonic** today → NVIDIA Magpie-TTS when self-hosted.
+- **Data:** a wellness records database the agent reads from and updates mid-call (schema +
+  tools TBD — see roadmap W3). Tools are added back deliberately, DB-scoped — *not* the old
+  open-ended Mac harness.
+- **Compute:** NVIDIA hosted endpoints now (just an `nvapi-` key); graduate to AWS when self-hosting.
 
 ## Key engineering tension to keep in mind
 High **reasoning** (thinking tokens) fights low **latency** (voice needs sub-second responses).
-Design around it: tiered models, filler phrases, streaming, TensorRT acceleration.
+Design around it: tiered models, filler phrases, streaming, TensorRT acceleration. For wellness,
+add a second tension: **accuracy & safety of health information** vs. a natural, unhurried chat.
 
 ## Roadmap (see docs/roadmap.md for detail)
-- M0  Local mic pipeline (learn Pipecat) — no telephony
-- M1  Twilio "hello" call (wire the WebSocket transport)
-- M2  Real conversation (STT + LLM + TTS)
-- M3  Make it human (interruptions, endpointing, prompt)
-- M4  Tools / function calling
-- M5  Self-host the LLM (SageMaker JumpStart NIM)
-- M6  Self-host STT + TTS
-- M7  Accelerate & measure (TensorRT, latency profiling)
-- M8  Production deploy
+- W0  Pure voice pipeline (STT→LLM→TTS over Twilio) — **done** (stripped from the Mac agent)
+- W1  Wellness persona & prompt (the check-up conversation)
+- W2  Wellness data model (what we store about a person's health)
+- W3  DB-backed tools (read record, update record, log a check-in) wired into the call
+- W4  Continuous prompt/context improvement loop (eval-driven)
+- W5  Self-host the LLM, then STT+TTS (NVIDIA NIMs on AWS)
+- W6  Accelerate & measure (TensorRT, latency profiling)
+- W7  Production deploy
 
 ## Docs index
 - `docs/architecture.md` — how the pieces fit
 - `docs/roadmap.md` — milestone detail + status
-- `docs/setup.md` — accounts, APIs, IAM permissions, local env
+- `docs/setup.md` — accounts, APIs, local env

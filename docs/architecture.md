@@ -29,12 +29,26 @@ Caller ─PSTN─▶ Twilio ──webhook──▶ our server returns TwiML:
   (handles encoding + resampling to/from what the models want).
 - The fragile internet "last mile" is between caller and Twilio — **Twilio owns it**,
   so a plain WebSocket to our server is fine (no WebRTC needed for phone).
+- **Per-call security:** `/twiml` mints a one-time token (delivered via `<Stream><Parameter>`
+  and the ws URL); `/ws` rejects any connection without a matching token, so a stranger who
+  finds the public endpoint can't open a session and burn STT/LLM/TTS credits.
+
+## Conversation control (what makes it usable, not just a demo)
+Implemented in `src/twilio_bot.py`:
+- **Deterministic greeting.** The opening line is spoken once as a fixed `TTSSpeakFrame` and
+  seeded into context as the assistant's first turn — so a barge-in can't trigger a
+  regeneration that loops the intro.
+- **Patient endpointing.** Silero VAD only *triggers* the turn decision; a prosody model
+  (Smart-Turn v3, preloaded once at startup) makes the real call, so the agent waits out
+  mid-sentence pauses instead of cutting the caller off.
+- **Goodbye → auto-hangup.** A processor watches the agent's *completed* turns for a genuine
+  sign-off and, once the conversation has actually run its course, queues an `EndFrame` after
+  the farewell finishes playing. A max-duration guard is the backstop.
 
 ## Why Pipecat (vs LiveKit vs raw WebSockets)
 - **Pipecat** = the orchestration brain. Vendor-neutral; swap any component in one line.
-- **LiveKit** = WebRTC *transport* infra (+ its own agents framework). Use its transport
-  when the client is a **browser/app** over the open internet (WebRTC's packet-loss
-  resilience + echo cancellation earn their keep there). Not needed for phone.
+- **LiveKit** = WebRTC *transport* infra. Use its transport when the client is a
+  **browser/app** over the open internet. Not needed for phone.
 - **Raw WebSockets** = we'd rebuild interruptions/streaming ourselves. Pipecat wraps it.
 
 ## Model strategy (managed now → customized later)
@@ -45,42 +59,32 @@ Caller ─PSTN─▶ Twilio ──webhook──▶ our server returns TwiML:
 | TTS  | **Cartesia Sonic** (`CartesiaTTSService`) — expressive; Aura was too flat | NVIDIA Magpie-TTS NIM on AWS GPU |
 
 > Note: NVIDIA's hosted *speech* models (Magpie/ASR) returned gRPC UNAUTHENTICATED for our
-> `nvapi-` key (partner-gated), so STT runs on Deepgram and TTS on Cartesia Sonic (chosen
-> over Deepgram Aura, which sounded flat and ignores prosody tags). The Nemotron **LLM** works fine via the hosted API. We converge on
-> full-NVIDIA speech when we self-host (M5/M6).
+> `nvapi-` key (partner-gated), so STT runs on Deepgram and TTS on Cartesia Sonic. The
+> Nemotron **LLM** works fine via the hosted API. We converge on full-NVIDIA speech when we
+> self-host.
 
 Pipecat decouples transport from pipeline, so swapping managed→self-hosted is mostly config.
 
-## Voice-controlled Mac tools (M4)
-The agent can act on the host Mac via a tool **registry** (`src/mac_tools/`). Each tool is a
-small, audited function (osascript/shell, injection-safe via `on run argv`) that is
-self-describing to the LLM through a Pipecat `FunctionSchema`. Binding spec:
-`docs/tooling/CONTRACT.md`.
+## Wellness data layer (planned — W2/W3)
+The agent's reason for being is a person's **wellness record**. The plan:
 
 ```
-Nemotron (brain) ──tool_call──▶ dispatch() ──▶ runner (osascript/shell) ──▶ macOS
-                                   │
-                  CONFIRM-class ───┴──▶ ConfirmationBroker (read-back → confirm_action → run)
+Nemotron (brain) ──tool_call──▶ wellness tool ──▶ DB access layer ──▶ database
+                                     │
+                  (read record / update record / log a check-in)
 ```
-- **Categories:** media, system, display, apps, windows, files, clipboard, screen, web,
-  notifications, productivity, messaging, input, network, power.
-- **Safety (enforced server-side, not trusted to the LLM):** risky actions (send / delete /
-  disruptive) are CONFIRM-gated — staged, read back aloud, and run only after a
-  `confirm_action` tool fires. Deletion is Trash-only. Tools are offered ONLY to an authorized
-  caller (owner's number); secrets (Keychain / passwords / SSH / `.env`) are a hard carve-out.
+- A small, **DB-scoped** set of tools — *not* the open-ended Mac harness that was removed.
+  Each tool does one well-defined thing against the wellness store (e.g. fetch a patient's
+  recent check-ins, record today's reported symptoms, flag a follow-up).
+- **Context injection:** before/at the start of a call, the relevant slice of the person's
+  record is summarized into the system prompt so the agent opens already knowing who it's
+  talking to and what to follow up on.
+- **Safety first:** health information is sensitive. Writes are validated and scoped; the
+  agent gives wellness *support and check-ins*, not diagnosis. Exact schema, access rules,
+  and tool contracts are defined in W2/W3 (the user will provide the prompt + tools).
 
-## Dynamic tool factory (GLM-5.1)
-When the agent lacks a tool, it calls `request_new_tool`; `src/mac_tools/factory.py` asks
-**Z.AI GLM-5.1** (reserved for this — never in the voice hot path) to author one module, runs
-it through `validator.py` (AST + deny-patterns), writes it to `generated/`, and **hot-registers
-it into the live call** (append schema → `context.set_tools(...)` → `llm.register_function`) so
-the same call uses it with no daemon restart. GLM gets a live system prompt rendered from the
-current registry (kept current in `docs/tooling/glm_factory_prompt.md`).
-
-## Agent memory (cross-call)
-`src/agent_memory/` persists calls, turns, tool invocations, and durable facts in local SQLite
-(`data/`, git-ignored). A summarizer (Nemotron) compresses each finished call; `recall()`
-injects "what to remember about this caller" into the next call's system prompt, and the agent
-can query memory live via `recall_memory` / save a fact via `remember_this`.
-```
-```
+## Removed (pre-pivot)
+The earlier Mac-control system — `src/mac_tools/` registry, the GLM-5.1 tool factory,
+`src/mac_actions.py` (osascript), `src/agent_memory/` (cross-call SQLite), and all per-call
+confirmation / caller-authorization wiring — has been deleted. timbre is a talk-only agent;
+the wellness DB tools are a fresh, narrow surface, not a revival of that harness.
