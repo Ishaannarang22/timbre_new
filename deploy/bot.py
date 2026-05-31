@@ -71,7 +71,21 @@ load_dotenv(override=True)
 # --- Config (values come from the Pipecat Cloud secret set) -------------------------------
 CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID") or "e07c00bc-4134-4eae-9ea4-1a55fb45746b"
 CARTESIA_SPEED = float(os.getenv("CARTESIA_SPEED", "0.95"))
-LLM_MODEL = os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
+# LLM endpoint + model. To use the self-hosted Nemotron fleet, set NEMOTRON_LLM_URL
+# (OpenAI-compatible /v1 base) and NEMOTRON_LLM_MODEL. When EITHER is unset we fall back
+# to the hosted NVIDIA NIM + nano model — so REVERTING is just removing those two vars.
+LLM_BASE_URL = os.getenv("NEMOTRON_LLM_URL") or "https://integrate.api.nvidia.com/v1"
+LLM_MODEL = (
+    os.getenv("NEMOTRON_LLM_MODEL")
+    or os.getenv("NVIDIA_LLM_MODEL")
+    or "nvidia/nemotron-3-nano-30b-a3b"
+)
+# Self-hosted vLLM/NIM endpoints usually ignore the bearer token; the hosted NIM needs the
+# real key. Use the NVIDIA key when present, else a harmless placeholder for the self-host.
+LLM_API_KEY = os.getenv("NVIDIA_API_KEY") or "EMPTY"
+# A bigger model (nemotron-3-super) can be slower to first token than nano; allow a longer
+# timeout via env without a code change. Default unchanged (8s) for the hosted nano path.
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "8.0"))
 MAX_CALL_SECS = float(os.getenv("POSTPARTUM_MAX_CALL_SECS", "900"))  # postpartum calls run long
 SR = 8000
 
@@ -118,9 +132,10 @@ async def run_postpartum(transport: FastAPIWebsocketTransport, handle_sigint: bo
                          appointments: list | None = None,
                          prescriptions: list | None = None) -> None:
     stt = DeepgramSTTService(api_key=os.environ["DEEPGRAM_API_KEY"], sample_rate=SR)
+    logger.info(f"LLM -> {LLM_MODEL} @ {LLM_BASE_URL} (timeout {LLM_TIMEOUT}s)")
     llm = OpenAILLMService(
-        api_key=os.environ["NVIDIA_API_KEY"],
-        base_url="https://integrate.api.nvidia.com/v1",
+        api_key=LLM_API_KEY,
+        base_url=LLM_BASE_URL,
         model=LLM_MODEL,
         params=OpenAILLMService.InputParams(
             temperature=0.2,
@@ -129,7 +144,7 @@ async def run_postpartum(transport: FastAPIWebsocketTransport, handle_sigint: bo
             extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
         ),
     )
-    llm._client = llm._client.with_options(timeout=8.0, max_retries=2)
+    llm._client = llm._client.with_options(timeout=LLM_TIMEOUT, max_retries=2)
     tts = CartesiaTTSService(
         api_key=os.environ["CARTESIA_API_KEY"],
         voice_id=CARTESIA_VOICE_ID,
