@@ -9,7 +9,10 @@ const PatchBody = z.object({
     .enum(["queued", "in_progress", "completed", "escalated", "abandoned", "failed"])
     .optional(),
   current_node: z.string().optional(),
-  ended_at: z.string().datetime().optional(),
+  // Accept timezone OFFSET form (e.g. "...+00:00"), not just the "Z" suffix —
+  // the agent sends datetime.now(timezone.utc).isoformat(), which uses +00:00.
+  // Plain .datetime() rejects offsets in zod 4 → every "mark completed" PATCH 422'd.
+  ended_at: z.string().datetime({ offset: true }).optional(),
   transcript_redacted: z.string().optional(),
   summary: z.string().optional(),
 });
