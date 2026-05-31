@@ -337,6 +337,10 @@ transcript later.
 
 **How we used the results.** Failures clustered by criterion → scoped edits to the per-node prompt or to the Flow graph → re-run the persona to validate the fix and watch for regressions in the other personas. Not a vibe-revision — a specific edit driven by a specific failed criterion.
 
+![Cekura evaluation dashboard for the timbre_postpartum_v1 agent, showing the_contradiction persona run: 100% success rate (1 successful call, 0 failures, 0 blocked), with per-criterion metric breakdowns (node_transition_accuracy, context_strategy, global_function_reliability, pii_redaction, escalation_correctness) and the bilingual tag at 100%.](docs/img/cekura-results.png)
+
+> Cekura's Results page for `timbre_postpartum_v1` running *The Contradiction* persona. The run completed end-to-end (success); the per-criterion scores under "Does Not Affect Calls Success" are what we used to drive the next round of prompt and Flow edits.
+
 **Improvement during the hackathon.** Aggregate rubric score moved from **`[start]`** to **`[end]`** across all personas. The biggest single win: **`[e.g. "The Contradiction" now triggers escalate_to_nurse within 2 turns of the clinical phrase, where the initial agent over-weighted the positive CSAT and missed it 3 of 5 times]`**.
 
 ---
