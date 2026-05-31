@@ -15,10 +15,12 @@
 
 ## What we're proud of
 
-- **A complete self-improving loop — live.** Real call → structured writes → Cekura LLM judge → prompt/Flow fix → next call. Not a slide. A loop that actually runs.
-- **A 13-node clinical Flow graph.** Identity verification, mother recovery, PHQ-2 / PHQ-9, newborn health, lactation support, medication adherence, pharmacy routing, social screen (incl. IPV), doula handoff, CSAT — plus three escalation paths (maternal, pediatric, crisis). HIPAA-shaped data handling throughout.
-- **5+ adversarial personas tested in Cekura.** *The Contradiction*, *The Cost-Blocker*, *The Proxy Responder*, *The Ambiguous Healer*, plus baseline scenarios. Failures clustered into specific prompt and Flow fixes — not a vibe-revision.
-- **Nemotron + Smart Turn V3, tuned together.** Nemotron reasoning settings tuned to keep turn latency under ~1.5s; PatientSmartTurnV3 prosody thresholds tuned so the agent doesn't cut off crying, exhausted, or hesitant patients mid-sentence.
+We knew the thing that would separate this from a normal hackathon voice agent is whether it can actually evaluate and improve itself. Four pieces we got running:
+
+- **The self-improvement loop closes, live.** Real call → structured writes to the dashboard → Cekura's LLM judge scores the transcript against our six-criterion rubric → failures cluster by criterion → we patch the prompt or Flow → the next call runs the new version. Most voice-agent demos stop at the call. We wired the loop that lets the demo keep getting better.
+- **Thirteen clinical nodes, built from scratch this weekend.** Identity verification, mother recovery, PHQ-2 with PHQ-9 escalation, newborn health, lactation, medication adherence with cost/transport branching, pharmacy routing, social screening (incl. an IPV path), doula handoff, CSAT, and three escalation routes (maternal, pediatric, crisis). The Supabase schema is shaped for real PHI — a HIPAA deployment doesn't need to rewrite tables.
+- **Five Cekura personas drove real fixes.** Contradiction, Cost-Blocker, Proxy Responder, Ambiguous Healer, plus a clean baseline. Every failed run points to a specific rubric criterion and a specific Flow node, so the next edit is targeted, not guesswork.
+- **Open-weight Nemotron and Pipecat's Smart Turn V3, tuned together.** Lowered Nemotron's reasoning effort for short confirmation turns; eased Smart Turn's prosody thresholds so the agent doesn't clip a patient pausing mid-thought. Median turn ~1.5 seconds — the latency where a clinical conversation still feels human.
 
 ---
 
@@ -167,27 +169,6 @@ absent-mindedly.
 | **State graph** | **Pipecat Flows** | Deterministic node-to-node transitions over a typed graph. The clinical conversation must visit specific nodes (PHQ-2, recovery, escalation) in a defined order. A free-form prompt cannot guarantee that. |
 | **TTS** | Cartesia Sonic | Sub-200ms first-byte audio, warm prosody, no robotic tail. The voice is the product's bedside manner. |
 | **Orchestrator** | Pipecat (Python) | Pulls the layers into one streaming pipeline. Handles backpressure, barge-in, and barge-out. Runs on Pipecat Cloud. |
-
-### The latency vs. reasoning tension
-
-The single hardest engineering problem in this build:
-
-> Better reasoning ⇄ more thinking tokens ⇄ slower replies ⇄ less
-> human-feeling conversation ⇄ patient hangs up ⇄ symptom not surfaced ⇄
-> harm.
-
-We manage it three ways:
-
-1. **Tiered models.** A small, fast model handles confirmations and
-   reflective acknowledgements. Full Nemotron only runs for clinical
-   reasoning steps.
-2. **Filler phrases.** The agent speaks a natural acknowledgement
-   ("*got it…*") while the LLM is still composing the substantive reply.
-3. **Streaming everywhere.** STT streams partials, LLM streams tokens,
-   TTS streams audio bytes. Nothing waits for a stage to finish.
-
-Future: TensorRT-LLM on a self-hosted Nemotron NIM for another ~2×
-speedup. Magpie-TTS to bring TTS in-house.
 
 > Diagram source: [`docs/img/voice-pipeline.mmd`](docs/img/voice-pipeline.mmd)
 
