@@ -301,6 +301,66 @@ transcript later.
 
 ---
 
+## How we used Cekura, Nemotron, and Pipecat
+
+### Pipecat — the runtime
+
+- **Streaming pipeline** (Pipecat, Python): Twilio Media Streams → Deepgram STT → endpointer → Nemotron LLM → Cartesia TTS → Twilio, all streaming, no full-turn buffering.
+- **Pipecat Flows** for the typed **13-node clinical state graph**: deterministic transitions between clinical nodes, scoped tool access per node, three global escalation paths (`escalate_to_nurse`, `escalate_pediatric`, `escalate_crisis`).
+- **`PatientSmartTurnV3`** prosody endpointing — the model that decides when a patient has *actually* finished a thought. Tuned away from naive silence-based VAD because a crying, hesitant, or exhausted patient produces long pauses mid-sentence that silence-based detection will cut off.
+- **Deployed to Pipecat Cloud** — live inbound + outbound phone number.
+
+### NVIDIA Nemotron — the LLM
+
+- **Open-weight Nemotron** is the reasoning engine behind every spoken turn — node transitions, tool calls, freeform reply.
+- Started on the **hosted Nemotron NIM** (build.nvidia.com); migrated mid-hackathon to a **self-hosted Nemotron-3-Super** endpoint for full control over reasoning settings and a clean path to HIPAA-eligible self-hosting (no BAA on the hosted NIM).
+- **Tiered reasoning effort** — low effort for confirmations and acknowledgements, full effort for clinical reasoning steps. Keeps median turn latency under ~1.5s without flattening clinical judgement.
+- Drives all Pipecat Flows tool calls — escalations, dashboard writes, profile lookups.
+
+### Cekura — the self-improvement loop
+
+**What we were testing for.** The four scenarios that statically-prompted clinical agents fail at, plus a baseline healthy-recovery call. Each persona stresses a different failure mode:
+
+| Persona | What it stresses | Initial pass rate | After fixes |
+|---|---|---|---|
+| The Contradiction | `escalate_to_nurse` despite a positive CSAT surface signal | `[X/N]` | `[Y/N]` |
+| The Cost-Blocker | `medication_adherence` + concierge routing on a $400 cost block | `[X/N]` | `[Y/N]` |
+| The Proxy Responder | `identity_verify` rejection without making the spouse feel dismissed | `[X/N]` | `[Y/N]` |
+| The Ambiguous Healer | Smart Turn endpointing + context stability under "I guess / maybe" | `[X/N]` | `[Y/N]` |
+| Baseline (healthy recovery) | Clean full-graph call with no false escalation | `[X/N]` | `[Y/N]` |
+
+**The rubric.** Six criteria, applied by an LLM judge to every transcript:
+`node_transition_accuracy`, `context_strategy`, `tool_call_latency_ms`,
+`global_function_reliability`, `pii_redaction`, `escalation_correctness`.
+
+**How we used the results.** Failures clustered by criterion → scoped edits to the per-node prompt or to the Flow graph → re-run the persona to validate the fix and watch for regressions in the other personas. Not a vibe-revision — a specific edit driven by a specific failed criterion.
+
+**Improvement during the hackathon.** Aggregate rubric score moved from **`[start]`** to **`[end]`** across all personas. The biggest single win: **`[e.g. "The Contradiction" now triggers escalate_to_nurse within 2 turns of the clinical phrase, where the initial agent over-weighted the positive CSAT and missed it 3 of 5 times]`**.
+
+---
+
+## What we built during the hackathon
+
+The voice infrastructure (Pipecat ↔ Twilio ↔ STT/LLM/TTS, the Python pipeline plumbing, an earlier morning-quote bot) existed going in. **Everything below is new — built during the hackathon:**
+
+- **The pivot itself.** Until this weekend, the agent was a morning-quote companion. We pivoted to postpartum maternal care and rewrote the prompt, the persona, and the operational model around it.
+- **The 13-node clinical Flow graph** (`src/flows/postpartum.py`) — identity_verify, mother_recovery, PHQ-2/PHQ-9 with the standard clinical escalation rules, newborn_health, lactation_support, medication_adherence with barrier-driven branching, pharmacy_routing, social_screen (IPV-aware), doula_handoff, csat_collection, escalation_handoff, plus three global escalation paths. Built from scratch.
+- **Self-hosted Nemotron-3-Super.** Migrated off the hosted NIM mid-hackathon for reasoning-setting control and the path to BAA-covered hosting.
+- **`PatientSmartTurnV3` tuning.** Prosody thresholds re-tuned for postpartum patients — slower, more hesitant cadence than the model's defaults assume.
+- **The dashboard** (`dashboard/`). Next.js + Supabase clinical console: queue, live calls, escalations, patient profile, Patient Voices, Cekura evals. Editorial Warm visual system ([`dashboard/DESIGN.md`](./dashboard/DESIGN.md)). Built this weekend.
+- **The Cekura self-improvement loop.** Five personas defined, six-criterion rubric, judge wiring, results write-back into the dashboard `/api/v1/evals` routes. Built this weekend.
+- **HIPAA-shaped Supabase schema.** Tables, RLS, redaction at the API boundary. Synthetic data only in the demo.
+- **The live demo flow.** Visitor lands on the dashboard homepage, becomes the patient themselves, the agent calls *them* using real synthetic patient records to demonstrate the full loop end-to-end. Built in the final hours.
+- **This README + six SVG diagrams** (architecture, voice pipeline, self-improvement loop, clinical flow, write path, dashboard mockups) — all in the Editorial Warm style.
+
+**Pre-existing (kept for clarity):**
+
+- Pipecat and Pipecat Flows themselves.
+- Twilio Media Streams + Deepgram STT + Cartesia TTS plumbing.
+- `src/twilio_bot.py` — the legacy morning-quote bot. Not part of the hackathon product; kept in-tree for reference.
+
+---
+
 ## Repo layout
 
 ```
