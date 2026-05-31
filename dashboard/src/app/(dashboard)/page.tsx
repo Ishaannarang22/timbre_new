@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Empty } from "@/components/ui/empty";
 import { PageHeader } from "@/components/page-header";
+import { DemoCall } from "@/components/demo-call";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { callStatusTone, relativeTime } from "@/lib/format";
 import { daysSince } from "@/lib/utils";
@@ -51,7 +52,8 @@ export default async function QueuePage() {
           </Badge>
         }
       />
-      <div className="p-6">
+      <div className="p-6 space-y-6">
+        <DemoCall />
         {error ? (
           <Empty title="Couldn't load queue" description={error.message} />
         ) : rows.length === 0 ? (
