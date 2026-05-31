@@ -26,7 +26,6 @@ import os
 import re
 import secrets
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket
@@ -63,7 +62,6 @@ from pipecat.transports.websocket.fastapi import (
 )
 from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
-from pipecat.utils.env import env_truthy
 
 load_dotenv()
 
@@ -158,57 +156,20 @@ def _evict_stale(now: float | None = None) -> None:
         logger.info(f"evicted {len(stale)} stale token entries")
 
 
-# P1-3: preload the Smart Turn v3 ONNX model ONCE at import time. Constructing a
-# PatientSmartTurnV3 loads a WhisperFeatureExtractor + an onnxruntime InferenceSession,
-# which blocks ~0.5-1s. Doing that inside /ws stalled the event loop right after the call
-# connected. We build one warm instance here (paying the cost at startup) and reuse its
-# loaded session + feature extractor for every call. Each call still gets a FRESH analyzer
-# object so the per-call audio buffer / silence counters / thread executor stay isolated —
-# only the expensive, immutable, read-only model artifacts (_session, _feature_extractor)
-# are shared. We don't edit turn_helpers.py; instead we allocate a bare instance with
-# __new__ and replay the cheap base-class init by hand, then graft on the warm artifacts.
-_WARM_TURN: "PatientSmartTurnV3 | None" = None
-
-
-def _get_warm_turn() -> "PatientSmartTurnV3":
-    global _WARM_TURN
-    if _WARM_TURN is None:
-        logger.info("preloading Smart Turn v3 ONNX model (one-time, at startup)…")
-        _WARM_TURN = PatientSmartTurnV3(
-            completion_threshold=SMART_TURN_THRESHOLD,
-            params=SmartTurnParams(stop_secs=SMART_TURN_STOP_SECS),
-        )
-        logger.info("Smart Turn v3 model preloaded")
-    return _WARM_TURN
-
-
 def build_turn_analyzer() -> "PatientSmartTurnV3":
-    """Return a fresh per-call PatientSmartTurnV3 that REUSES the preloaded ONNX session +
-    feature extractor (no blocking model reload inside /ws). Per-call mutable state is all
-    fresh, so this is safe even if calls were to overlap."""
-    warm = _get_warm_turn()
-    params = SmartTurnParams(stop_secs=SMART_TURN_STOP_SECS)
+    """Construct a FRESH PatientSmartTurnV3 (and its own ONNX session) for one call.
 
-    a = PatientSmartTurnV3.__new__(PatientSmartTurnV3)
-    # --- replay BaseTurnAnalyzer.__init__ (sample rate bookkeeping) ---
-    a._init_sample_rate = None
-    a._sample_rate = 0
-    # --- replay BaseSmartTurn.__init__ (per-call inference state) ---
-    a._params = params
-    a._stop_ms = params.stop_secs * 1000
-    a._audio_buffer = []
-    a._speech_triggered = False
-    a._silence_ms = 0
-    a._speech_start_time = 0
-    a._executor = ThreadPoolExecutor(max_workers=1)  # own thread; not shared with warm
-    a._vad_start_secs = 0.0
-    # --- replay LocalSmartTurnAnalyzerV3.__init__ tail, but SKIP the heavy load ---
-    a._log_data = env_truthy("PIPECAT_SMART_TURN_LOG_DATA", default=False)
-    a._feature_extractor = warm._feature_extractor  # immutable, safe to share
-    a._session = warm._session  # ORT InferenceSession.run() is thread-safe / read-only
-    # --- replay PatientSmartTurnV3.__init__ (our threshold knob) ---
-    a._completion_threshold = SMART_TURN_THRESHOLD
-    return a
+    We deliberately do NOT reuse a shared "warm" instance via a __new__/attribute-graft
+    trick anymore: that trick referenced `_feature_extractor`, which is no longer an
+    attribute on current Pipecat's LocalSmartTurnAnalyzerV3 — so it raised
+    `AttributeError` inside /ws and dropped every inbound call immediately. Building a new
+    analyzer per call sidesteps that entirely; the ONNX load is in C++ and only blocks
+    ~0.5s, which is fine for a phone call. (postpartum_bot.py does the same — for the same
+    reason.)"""
+    return PatientSmartTurnV3(
+        completion_threshold=SMART_TURN_THRESHOLD,
+        params=SmartTurnParams(stop_secs=SMART_TURN_STOP_SECS),
+    )
 
 
 def system_prompt() -> str:
@@ -304,9 +265,12 @@ class GoodbyeProcessor(FrameProcessor):
 
 @app.on_event("startup")
 async def _preload_models() -> None:
-    # P1-3: pay the Smart Turn ONNX load cost ONCE at app startup (before any call), off the
-    # request path, so /ws never blocks the event loop reloading the model per call.
-    _get_warm_turn()
+    # Warm the Smart Turn v3 model once at startup (pull the ONNX file into OS cache and
+    # initialize onnxruntime/torch) so the FIRST call's per-call construction is fast. We
+    # discard the instance — each call builds its own (see build_turn_analyzer).
+    logger.info("warming Smart Turn v3 model at startup…")
+    build_turn_analyzer()
+    logger.info("Smart Turn v3 model warm")
 
 
 @app.get("/health")
