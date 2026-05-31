@@ -1,5 +1,7 @@
 # timbre
 
+**▶ [Demo video & pitch deck](https://canva.link/1lmn69qgpsutz3p)**
+
 **A self-improving voice agent that calls postpartum patients at home — and gets safer every time it does.**
 
 > Every year in the US, ~700 mothers die from pregnancy-related causes.
