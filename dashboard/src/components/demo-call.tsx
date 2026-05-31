@@ -85,12 +85,13 @@ export function DemoCall() {
             Live demo
           </span>
           <h2 className="mt-3 font-serif text-[32px] leading-[1.1] tracking-[-0.02em] text-foreground">
-            Hear timbre call you —<br className="hidden sm:block" /> right now.
+            Step into a patient&rsquo;s shoes —<br className="hidden sm:block" /> take her call.
           </h2>
           <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
-            Pick a patient, enter your number, and our voice agent calls you in seconds —
-            posing as her, with her real chart and a real postpartum check-in. Whatever you
-            tell it lands on her dashboard.
+            Pick one of our real patients and enter your number. timbre calls you and runs
+            her postpartum check-in as if you were her — pulling her actual chart. On the
+            call, you can confirm it&rsquo;s using her real records: her baby, her meds, her
+            appointments.
           </p>
         </div>
 
@@ -99,7 +100,7 @@ export function DemoCall() {
           {/* patient picker */}
           <div>
             <label className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-              Who should call you?
+              Which patient do you want to be?
             </label>
             <div className="mt-2 grid grid-cols-3 gap-2">
               {PATIENTS.map((p) => {
@@ -186,14 +187,15 @@ export function DemoCall() {
                     — your phone will ring from <strong>{status.from}</strong>
                   </>
                 ) : null}
-                . Pick up and talk to Maya.
+                . Pick up: Maya checks in on you using {status.name}&rsquo;s real chart, so
+                you can confirm it knows her records.
               </span>
             </div>
           ) : status.kind === "error" ? (
             <p className="text-sm text-destructive">{status.message}</p>
           ) : (
             <p className="text-[11px] text-muted-foreground">
-              A real call is placed immediately to the number you enter.
+              We place a real call to your number and treat you as the patient you pick.
             </p>
           )}
         </div>
