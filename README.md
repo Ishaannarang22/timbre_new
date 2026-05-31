@@ -319,43 +319,6 @@ docs/                     # architecture, roadmap, HIPAA notes
 
 ---
 
-## Quickstart
-
-```bash
-# Python 3.11+; macOS needs portaudio: `brew install portaudio`
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-
-# Fill .env (NVIDIA, Deepgram, Cartesia, Twilio, DASHBOARD_API_URL, DASHBOARD_API_TOKEN).
-
-# Smoke-test the postpartum bot end-to-end without placing a real call:
-.venv/bin/python scripts/sim_twilio_ws.py \
-    --bot postpartum \
-    --patient-id 11111111-1111-1111-1111-111111111111
-```
-
-Expected:
-
-```
-[PASS] ws handshake (ws://127.0.0.1:8080/ws)
-[PASS] greeting audio frames: ...
-[PASS] clean teardown
-```
-
-To stand up the dashboard side, see [`dashboard/README.md`](./dashboard/README.md).
-
-### Regenerating the diagrams
-
-The five `.svg` files in `docs/img/` are rendered from `.mmd` source.
-Edit the source, then:
-
-```bash
-npx -y -p @mermaid-js/mermaid-cli@latest mmdc \
-    -i docs/img/<name>.mmd -o docs/img/<name>.svg -b transparent
-```
-
----
-
 ## HIPAA posture
 
 This is a **demo deployment.** All seeded patients are synthetic.
