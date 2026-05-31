@@ -11,6 +11,15 @@
 
 ---
 
+## What we're proud of
+
+- **A complete self-improving loop — live.** Real call → structured writes → Cekura LLM judge → prompt/Flow fix → next call. Not a slide. A loop that actually runs.
+- **A 13-node clinical Flow graph.** Identity verification, mother recovery, PHQ-2 / PHQ-9, newborn health, lactation support, medication adherence, pharmacy routing, social screen (incl. IPV), doula handoff, CSAT — plus three escalation paths (maternal, pediatric, crisis). HIPAA-shaped data handling throughout.
+- **5+ adversarial personas tested in Cekura.** *The Contradiction*, *The Cost-Blocker*, *The Proxy Responder*, *The Ambiguous Healer*, plus baseline scenarios. Failures clustered into specific prompt and Flow fixes — not a vibe-revision.
+- **Nemotron + Smart Turn V3, tuned together.** Nemotron reasoning settings tuned to keep turn latency under ~1.5s; PatientSmartTurnV3 prosody thresholds tuned so the agent doesn't cut off crying, exhausted, or hesitant patients mid-sentence.
+
+---
+
 ## The 42 days nobody is watching
 
 The first six weeks after birth are the highest-risk window in maternal care.
